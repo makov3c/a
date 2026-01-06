@@ -36,6 +36,12 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
+type SubscriptionClaims struct {
+	UserID   int64   `json:"user_id"`
+	TopicIDs []int64 `json:"topic_ids"`
+	jwt.RegisteredClaims
+}
+
 type User struct {
 	ID   int64  `gorm:"primaryKey"`
 	Name string `gorm:"not null"`
@@ -64,6 +70,15 @@ type MessageLike struct {
 	UserID    int64 `gorm:"not null;index"`
 
 	_ struct{} `gorm:"uniqueIndex:idx_message_user"` // (user can like a message only once)
+}
+
+type SubscriptionNode struct {
+	ID      string
+	Address string
+}
+
+var subscriptionNodes = []SubscriptionNode{
+	{ID: "node-1", Address: "localhost:9876"},
 }
 
 type server struct {
@@ -422,5 +437,79 @@ func (s *server) LikeMessage(ctx context.Context, req *pb.LikeMessageRequest) (*
 		Text:      msg.Text,
 		Likes:     msg.Likes,
 		CreatedAt: timestamppb.New(msg.CreatedAt),
+	}, nil
+}
+
+func generateSubscriptionToken(userID int64, topicIDs []int64) (string, error) {
+	claims := SubscriptionClaims{
+		UserID:   userID,
+		TopicIDs: topicIDs,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(5 * time.Minute)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString(jwtSecret)
+}
+
+func chooseSubscriptionNode(userID int64, topicIDs []int64) SubscriptionNode {
+
+	return subscriptionNodes[0]
+}
+
+func (s *server) GetSubscriptionNode(ctx context.Context, req *pb.SubscriptionNodeRequest) (*pb.SubscriptionNodeResponse, error) {
+
+	// authenticate user
+	userID, err := userIDFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(req.TopicId) == 0 {
+		return nil, status.Error(
+			codes.InvalidArgument,
+			"no topics provided",
+		)
+	}
+
+	var count int64
+	if err := s.db.WithContext(ctx).
+		Model(&Topic{}).
+		Where("id IN ?", req.TopicId).
+		Count(&count).
+		Error; err != nil {
+
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	if count != int64(len(req.TopicId)) {
+		return nil, status.Error(
+			codes.NotFound,
+			"one or more topics do not exist",
+		)
+	}
+
+	// choose the subscription node
+	chosen := chooseSubscriptionNode(userID, req.TopicId)
+
+	node := &pb.NodeInfo{
+		NodeId:  chosen.ID,
+		Address: chosen.Address,
+	}
+
+	// issue a subscription token
+	subToken, err := generateSubscriptionToken(userID, req.TopicId)
+	if err != nil {
+		return nil, status.Error(
+			codes.Internal,
+			"failed to generate subscription token",
+		)
+	}
+
+	return &pb.SubscriptionNodeResponse{
+		SubscribeToken: subToken,
+		Node:           node,
 	}, nil
 }
