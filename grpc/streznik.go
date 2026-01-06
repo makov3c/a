@@ -513,3 +513,23 @@ func (s *server) GetSubscriptionNode(ctx context.Context, req *pb.SubscriptionNo
 		Node:           node,
 	}, nil
 }
+
+func (s *server) ListTopics(ctx context.Context, req *emptypb.Empty) (*pb.ListTopicsResponse, error) {
+	var topics []Topic
+
+	// Query all topics from the DB
+	if err := s.db.WithContext(ctx).Find(&topics).Error; err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	allTopics := make([]*pb.Topic, 0, len(topics))
+	for _, t := range topics {
+		allTopics = append(allTopics, &pb.Topic{
+			Id:   t.ID,
+			Name: t.Name,
+		})
+	}
+
+	return &pb.ListTopicsResponse{
+		Topics: allTopics,
+	}, nil
+}

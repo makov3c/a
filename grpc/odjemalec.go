@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 // Client wraps gRPC connection and JWT
@@ -57,6 +58,8 @@ func ClientMain(url string) {
 		log.Fatal("Failed to get subscription node:", err)
 	}
 	fmt.Println("Subscribed to topic:", topicID)
+
+	a.ListTopics()
 }
 
 func NewClient(addr string) (*Client, error) {
@@ -176,4 +179,17 @@ func (c *Client) GetSubscriptionNode(topicIDs []int64) (*pb.SubscriptionNodeResp
 	fmt.Printf("Subscribe token: %s\n", res.SubscribeToken)
 
 	return res, nil
+}
+
+// func (c *Client) ListTopics() []*pb.Topic {}
+func (c *Client) ListTopics() {
+
+	res, err := c.api.ListTopics(c.ctx(), &emptypb.Empty{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, t := range res.Topics {
+		fmt.Printf("Topic ID: %d, Name: %s\n", t.Id, t.Name)
+	}
+	//return res.Topics
 }
