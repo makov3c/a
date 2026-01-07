@@ -33,11 +33,11 @@ func ClientMain(url string) {
 	}
 	defer b.Close()
 
-	anID := a.CreateUser("Anton")
-	barID := b.CreateUser("Barbara")
+	aID := a.CreateUser("Anton")
+	bID := b.CreateUser("Barbara")
 
-	a.Login(anID)
-	b.Login(barID)
+	a.Login(aID)
+	b.Login(bID)
 
 	topicID := a.CreateTopic("chatting")
 
@@ -60,6 +60,19 @@ func ClientMain(url string) {
 	fmt.Println("Subscribed to topic:", topicID)
 
 	a.ListTopics()
+
+	a.GetUsers()
+
+	c, err := NewClient(url)
+	if err != nil {
+		panic(err)
+	}
+	defer c.Close()
+
+	cID := c.CreateUser("Cecilija")
+	c.Login(cID)
+
+	c.GetUsers()
 }
 
 func NewClient(addr string) (*Client, error) {
@@ -181,7 +194,6 @@ func (c *Client) GetSubscriptionNode(topicIDs []int64) (*pb.SubscriptionNodeResp
 	return res, nil
 }
 
-// func (c *Client) ListTopics() []*pb.Topic {}
 func (c *Client) ListTopics() {
 
 	res, err := c.api.ListTopics(c.ctx(), &emptypb.Empty{})
@@ -191,5 +203,15 @@ func (c *Client) ListTopics() {
 	for _, t := range res.Topics {
 		fmt.Printf("Topic ID: %d, Name: %s\n", t.Id, t.Name)
 	}
-	//return res.Topics
+}
+
+func (c *Client) GetUsers() {
+
+	res, err := c.api.GetUsers(c.ctx(), &emptypb.Empty{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, u := range res.Users {
+		fmt.Printf("User ID: %d, User name: %s\n", u.Id, u.Name)
+	}
 }

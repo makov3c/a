@@ -138,6 +138,10 @@ message ListTopicsResponse {
   repeated Topic topics = 1;
 }
 
+message GetUsersResponse {
+  repeated User users = 1;
+}
+
 message GetMessagesRequest {
   int64 topic_id = 1;
   int64 from_message_id = 2; // starting id of the message (0 from beggining)

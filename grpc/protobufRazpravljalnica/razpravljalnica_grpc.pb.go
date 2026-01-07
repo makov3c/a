@@ -34,6 +34,9 @@ type MessageBoardClient interface {
 	GetSubscriptionNode(ctx context.Context, in *SubscriptionNodeRequest, opts ...grpc.CallOption) (*SubscriptionNodeResponse, error)
 	// Returns all the topics
 	ListTopics(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ListTopicsResponse, error)
+	// NOTE: Add method GetUsers or attach name to message in order to obtain user names.
+	// Currently, there is no way for the client to display user names, only user IDs
+	GetUsers(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetUsersResponse, error)
 	// Returns messages in a topic
 	GetMessages(ctx context.Context, in *GetMessagesRequest, opts ...grpc.CallOption) (*GetMessagesResponse, error)
 	// Subscribe to topics; goes to the node returned by head
@@ -122,6 +125,15 @@ func (c *messageBoardClient) ListTopics(ctx context.Context, in *emptypb.Empty, 
 	return out, nil
 }
 
+func (c *messageBoardClient) GetUsers(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetUsersResponse, error) {
+	out := new(GetUsersResponse)
+	err := c.cc.Invoke(ctx, "/razpravljalnica.MessageBoard/GetUsers", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *messageBoardClient) GetMessages(ctx context.Context, in *GetMessagesRequest, opts ...grpc.CallOption) (*GetMessagesResponse, error) {
 	out := new(GetMessagesResponse)
 	err := c.cc.Invoke(ctx, "/razpravljalnica.MessageBoard/GetMessages", in, out, opts...)
@@ -192,6 +204,9 @@ type MessageBoardServer interface {
 	GetSubscriptionNode(context.Context, *SubscriptionNodeRequest) (*SubscriptionNodeResponse, error)
 	// Returns all the topics
 	ListTopics(context.Context, *emptypb.Empty) (*ListTopicsResponse, error)
+	// NOTE: Add method GetUsers or attach name to message in order to obtain user names.
+	// Currently, there is no way for the client to display user names, only user IDs
+	GetUsers(context.Context, *emptypb.Empty) (*GetUsersResponse, error)
 	// Returns messages in a topic
 	GetMessages(context.Context, *GetMessagesRequest) (*GetMessagesResponse, error)
 	// Subscribe to topics; goes to the node returned by head
@@ -228,6 +243,9 @@ func (UnimplementedMessageBoardServer) GetSubscriptionNode(context.Context, *Sub
 }
 func (UnimplementedMessageBoardServer) ListTopics(context.Context, *emptypb.Empty) (*ListTopicsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListTopics not implemented")
+}
+func (UnimplementedMessageBoardServer) GetUsers(context.Context, *emptypb.Empty) (*GetUsersResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetUsers not implemented")
 }
 func (UnimplementedMessageBoardServer) GetMessages(context.Context, *GetMessagesRequest) (*GetMessagesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetMessages not implemented")
@@ -395,6 +413,24 @@ func _MessageBoard_ListTopics_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MessageBoard_GetUsers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MessageBoardServer).GetUsers(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/razpravljalnica.MessageBoard/GetUsers",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MessageBoardServer).GetUsers(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _MessageBoard_GetMessages_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetMessagesRequest)
 	if err := dec(in); err != nil {
@@ -487,6 +523,10 @@ var _MessageBoard_serviceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListTopics",
 			Handler:    _MessageBoard_ListTopics_Handler,
+		},
+		{
+			MethodName: "GetUsers",
+			Handler:    _MessageBoard_GetUsers_Handler,
 		},
 		{
 			MethodName: "GetMessages",

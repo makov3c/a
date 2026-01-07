@@ -533,3 +533,22 @@ func (s *server) ListTopics(ctx context.Context, req *emptypb.Empty) (*pb.ListTo
 		Topics: allTopics,
 	}, nil
 }
+
+func (s *server) GetUsers(ctx context.Context, req *emptypb.Empty) (*pb.GetUsersResponse, error) {
+	var users []User
+
+	if err := s.db.WithContext(ctx).Find(&users).Error; err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	allUsers := make([]*pb.User, 0, len(users))
+	for _, t := range users {
+		allUsers = append(allUsers, &pb.User{
+			Id:   t.ID,
+			Name: t.Name,
+		})
+	}
+
+	return &pb.GetUsersResponse{
+		Users: allUsers,
+	}, nil
+}
