@@ -87,9 +87,10 @@ type server struct {
 	db *gorm.DB
 	// lastUserID   int64
 	// mu_userCount sync.Mutex
+	master string // master server URL, "" if i am write node
 }
 
-func Server(url string) {
+func Server(url string, master string) {
 
 	// database z uporabniki
 	db, err := gorm.Open(sqlite.Open("baza.db"), &gorm.Config{})
@@ -108,7 +109,7 @@ func Server(url string) {
 		grpc.UnaryInterceptor(authInterceptor),
 	)
 
-	s := &server{db: db} // creates a new value of type server, assigns field db to the vasiable users_db (a *gorm DB)
+	s := &server{db: db, master: master} // creates a new value of type server, assigns field db to the vasiable users_db (a *gorm DB)
 	pb.RegisterMessageBoardServer(grpcServer, s)
 
 	// izpišemo ime strežnika
