@@ -90,6 +90,7 @@ service  MessageBoard{
 
   // NOTE: Add method GetUsers or attach name to message in order to obtain user names.
   // Currently, there is no way for the client to display user names, only user IDs
+  rpc GetUsers(google.protobuf.Empty) returns (GetUsersResponse);
 
   // Returns messages in a topic
   rpc GetMessages(GetMessagesRequest) returns (GetMessagesResponse);
