@@ -45,6 +45,16 @@ func ClientMain(url string) {
 	aMsgID := a.PostMessage(topicID, "i love this")
 	bMsgID := b.PostMessage(topicID, "me too")
 
+	b.PostMessage(topicID, "doing PS hw")
+	b.PostMessage(topicID, "during matlab exercises")
+	b.PostMessage(topicID, "writing code")
+	a.PostMessage(topicID, "all alone")
+	a.PostMessage(topicID, "and also writing silly messages")
+	bMsgID2 := b.PostMessage(topicID, "so i can test")
+	b.PostMessage(topicID, "if function")
+	b.PostMessage(topicID, "get messages something something")
+	b.PostMessage(topicID, "actually works")
+
 	fmt.Println("\n--- A likes B's message")
 	a.LikeMessage(topicID, bMsgID)
 
@@ -73,6 +83,11 @@ func ClientMain(url string) {
 	c.Login(cID)
 
 	c.GetUsers()
+
+	b.GetMessages(topicID, 0, 10)
+	fmt.Println("\n --- \n")
+	b.GetMessages(topicID, bMsgID2, 4)
+
 }
 
 func NewClient(addr string) (*Client, error) {
@@ -213,5 +228,28 @@ func (c *Client) GetUsers() {
 	}
 	for _, u := range res.Users {
 		fmt.Printf("User ID: %d, User name: %s\n", u.Id, u.Name)
+	}
+}
+
+func (c *Client) GetMessages(topicID int64, fromMessageID int64, limit int32) {
+
+	res, err := c.api.GetMessages(c.ctx(), &pb.GetMessagesRequest{
+		TopicId:       topicID,
+		FromMessageId: fromMessageID,
+		Limit:         limit,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	for _, m := range res.Messages {
+		fmt.Printf(
+			"Message ID: %d | Topic: %d | User: %d | Likes: %d | %s\n",
+			m.Id,
+			m.TopicId,
+			m.UserId,
+			m.Likes,
+			m.Text,
+		)
 	}
 }

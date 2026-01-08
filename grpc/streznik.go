@@ -158,7 +158,7 @@ func generateJWT(userID int64) (string, error) {
 	claims := Claims{
 		UserID: userID,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)), // ???
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
 	}
@@ -551,5 +551,47 @@ func (s *server) GetUsers(ctx context.Context, req *emptypb.Empty) (*pb.GetUsers
 
 	return &pb.GetUsersResponse{
 		Users: allUsers,
+	}, nil
+}
+
+// TODO: reindeksiranje messageov. V vsakem topicu posebej začnemo sporočila številčiti z 1
+// (zato tudi pri vsakem update/delete/post message zraven podamo topic ID!!)
+// lahko namesto rewritanja tega samo pri getMessages gledaš najmanjših k indeksov ...
+// najbrž ni tak namen ...
+
+func (s *server) GetMessages(ctx context.Context, req *pb.GetMessagesRequest) (*pb.GetMessagesResponse, error) {
+
+	var messages []Message
+
+	err := s.db.WithContext(ctx).
+		Where("topic_id = ?", req.TopicId).
+		Where(
+			"( ? = 0 OR id > ? )", // ker ima vsak message qunique ID ne glede na topic ...
+			req.FromMessageId,
+			req.FromMessageId,
+		).
+		Order("id ASC").
+		Limit(int(req.Limit)).
+		Find(&messages).
+		Error
+
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	allMessages := make([]*pb.Message, 0, len(messages))
+	for _, m := range messages {
+		allMessages = append(allMessages, &pb.Message{
+			Id:        m.ID,
+			TopicId:   m.TopicID,
+			UserId:    m.UserID,
+			Text:      m.Text,
+			Likes:     m.Likes,
+			CreatedAt: timestamppb.New(m.CreatedAt),
+		})
+	}
+
+	return &pb.GetMessagesResponse{
+		Messages: allMessages,
 	}, nil
 }
