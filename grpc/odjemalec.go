@@ -20,7 +20,7 @@ type Client struct {
 	token string
 }
 
-func ClientMain(url string) {
+func ClientMain(url string, uName string) {
 	a, err := NewClient(url)
 	if err != nil {
 		panic(err)
@@ -33,7 +33,7 @@ func ClientMain(url string) {
 	}
 	defer b.Close()
 
-	aID := a.CreateUser("Anton")
+	aID := a.CreateUser(uName)
 	bID := b.CreateUser("Barbara")
 
 	a.Login(aID)
