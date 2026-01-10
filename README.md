@@ -3,6 +3,7 @@ Rok za oddajo: 12. 1. 2026
 
 
 Pojdi v mapo grpc
+
 Poženi strežnik:
 ```
 go run . -p 9876
@@ -26,7 +27,7 @@ go run . -s localhost
 
 5. Spreminjanje topica - tipka Esc
 
-6. Všečkanje sporočil (ko si v nekem topicu) - Ctrl+L da se premikaš po sporočilih in Enter, da jih všečkaš
+6. Všečkanje sporočil (ko si v nekem topicu) - s Ctrl+L prideš v okvirček, kjer so sporočila, nato pa se s tab/puščicami premikaš po sporočilih. Pritisni Enter, da jih všečkaš
 
 7.1 načeloma Ctrl+M da greš nazaj na pisanje, ampak trenutno ne dela
 
