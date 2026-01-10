@@ -33,7 +33,7 @@ func ClientMain(url string, uName string) {
 	}
 	defer b.Close()
 
-	aID := a.CreateUser(uName)
+	aID := a.CreateUser("anton")
 	bID := b.CreateUser("Barbara")
 
 	a.Login(aID)
@@ -57,6 +57,8 @@ func ClientMain(url string, uName string) {
 
 	fmt.Println("\n--- A likes B's message")
 	a.LikeMessage(topicID, bMsgID)
+	b.LikeMessage(topicID, bMsgID)
+	a.LikeMessage(topicID, bMsgID2)
 
 	fmt.Println("\n--- A updates their message ---")
 	a.UpdateMessage(topicID, aMsgID, "im hungry")
@@ -155,7 +157,7 @@ func (c *Client) PostMessage(topicID int64, text string) int64 {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println("Posted message:", res)
+	// fmt.Println("Posted message:", res)
 	return res.Id
 }
 

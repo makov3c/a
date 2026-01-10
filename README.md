@@ -1,12 +1,35 @@
 # klepetalnica - ps projekt
 Rok za oddajo: 12. 1. 2026
 
+
+Pojdi v mapo grpc
 Poženi strežnik:
 ```
-go run grpc.go streznik.go odjemalec.go -p 9875
+go run . -p 9876
 ```
 
 Poženi odjemalca:
 ```
-go run grpc.go streznik.go odjemalec.go -s localhost -p 9875
+go run . -s localhost
 ```
+
+
+## kako uporabljati TUI
+
+1. Prijavi se z nekim že obstoječim UserID (nizke številke)
+
+2. Po Topicih se sprehajaš s tipkami gor/dol ali s tab
+
+3. Topic izbereš s tipko enter
+
+4. Napišeš Message in ga pošlješ s tipko enter
+
+5. Spreminjanje topica - tipka Esc
+
+6. Všečkanje sporočil (ko si v nekem topicu) - Ctrl+L da se premikaš po sporočilih in Enter, da jih všečkaš
+
+7.1 načeloma Ctrl+M da greš nazaj na pisanje, ampak trenutno ne dela
+
+7.2 Pisanje lahko nadaljuješ tako da klikneš Esc, in ponovno izbereš želeni topic
+
+8. Program zapreš z Ctrl+C

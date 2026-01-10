@@ -9,7 +9,7 @@ func main() {
 	// read CLI arguments
 	sPtr := flag.String("s", "", "server URL")
 	pPtr := flag.Int("p", 9876, "port number")
-	uName := flag.String("u", "Bauer", "username")
+	// uName := flag.String("u", "Bauer", "username")
 
 	flag.Parse()
 
@@ -20,7 +20,8 @@ func main() {
 		fmt.Println("Starting gRPC server on", url)
 		Server(url)
 	} else {
-		fmt.Println("Starting gRPC client, connecting to", url)
-		ClientMain(url, *uName)
+		fmt.Println("Starting gRPC TUI client, connecting to", url)
+		StartTUI(url)
 	}
+
 }
