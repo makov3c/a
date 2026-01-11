@@ -6,6 +6,7 @@ toolchain go1.24.11
 
 require (
 	github.com/golang-jwt/jwt/v5 v5.3.0
+	github.com/urfave/cli/v3 v3.6.1
 	google.golang.org/grpc v1.78.0
 	google.golang.org/protobuf v1.36.11
 	gorm.io/driver/sqlite v1.6.0

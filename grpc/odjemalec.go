@@ -13,6 +13,58 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
+type ControlPlaneClient struct {
+	conn *grpc.ClientConn
+	api pb.ControlPlaneClient
+	token string
+}
+func NewControlPlaneClient (addr string, s2s_psk string) (*ControlPlaneClient, error) {
+	conn, err := grpc.Dial(
+		addr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		return nil, err
+	}
+	log.Printf("newcontrolplaneclient called with ", addr, " ", s2s_psk, "\n")
+	return &ControlPlaneClient{
+		conn: conn,
+		api:  pb.NewControlPlaneClient(conn),
+		token: s2s_psk,
+	}, nil
+}
+func (c *ControlPlaneClient) Close() {
+	c.conn.Close()
+}
+func (c *ControlPlaneClient) ctx () context.Context {
+	md := metadata.New(nil)
+	if c.token != "" {
+		md.Set("authorization", "Bearer "+c.token)
+	}
+	return metadata.NewOutgoingContext(context.Background(), md)
+}
+func (c *ControlPlaneClient) GetClusterState (name string) (string, string, error) {
+	res, err := c.api.GetClusterState(context.Background(), &emptypb.Empty{})
+	if err != nil {
+		return "", "", err
+	}
+	return res.Head.Address, res.Tail.Address, nil
+}
+func (c *ControlPlaneClient) ReportNotifyError (slave_url string) error {
+	_, err := c.api.ReportNotifyError(c.ctx(), &pb.NotifyErrorReport{Slave: slave_url})
+	if err != nil {
+		return err
+	}
+	return nil
+}
+func (c *ControlPlaneClient) ServerAvailable (url string) error {
+	_, err := c.api.ServerAvailable(c.ctx(), &pb.NodeInfo{NodeId: url, Address: url})
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 // Client wraps gRPC connection and JWT
 type Client struct {
 	conn  *grpc.ClientConn
@@ -57,6 +109,14 @@ func ClientMain(url string) {
 
 	fmt.Println("\n--- A likes B's message")
 	a.LikeMessage(topicID, bMsgID)
+	a.LikeMessage(topicID, bMsgID)
+	a.LikeMessage(topicID, bMsgID)
+	a.LikeMessage(topicID, bMsgID)
+	a.LikeMessage(topicID, bMsgID)
+	a.LikeMessage(topicID, bMsgID)
+	a.LikeMessage(topicID, bMsgID)
+	a.LikeMessage(topicID, bMsgID)
+	a.LikeMessage(topicID, bMsgID)
 
 	fmt.Println("\n--- A updates their message ---")
 	a.UpdateMessage(topicID, aMsgID, "im hungry")
@@ -91,6 +151,7 @@ func ClientMain(url string) {
 }
 
 func NewClient(addr string) (*Client, error) {
+	log.Printf("NewClient called with ", addr)
 	conn, err := grpc.Dial(
 		addr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -111,12 +172,9 @@ func (c *Client) Close() {
 
 func (c *Client) ctx() context.Context {
 	md := metadata.New(nil)
-
-	// Only include authorization if we have token
 	if c.token != "" {
 		md.Set("authorization", "Bearer "+c.token)
 	}
-
 	return metadata.NewOutgoingContext(context.Background(), md)
 }
 
@@ -128,7 +186,6 @@ func (c *Client) CreateUser(name string) int64 {
 	fmt.Println("Created user:", res)
 	return res.Id
 }
-
 func (c *Client) Login(userID int64) {
 	res, err := c.api.Login(context.Background(), &pb.LoginRequest{UserId: userID})
 	if err != nil {
@@ -147,6 +204,22 @@ func (c *Client) CreateTopic(name string) int64 {
 	return res.Id
 }
 
+func (c *Client) AddUser(user *pb.User) error {
+	_, err := c.api.AddUser(c.ctx(), user)
+	return err
+}
+func (c *Client) AddMessage(message *pb.Message) error {
+	_, err := c.api.AddMessage(c.ctx(), message)
+	return err
+}
+func (c *Client) AddTopic(topic *pb.Topic) error {
+	_, err := c.api.AddTopic(c.ctx(), topic)
+	return err
+}
+func (c *Client) AddLike(like *pb.LikeMessageRequest) error {
+	_, err := c.api.AddLike(c.ctx(), like)
+	return err
+}
 func (c *Client) PostMessage(topicID int64, text string) int64 {
 	res, err := c.api.PostMessage(c.ctx(), &pb.PostMessageRequest{
 		TopicId: topicID,

@@ -100,6 +100,24 @@ service  MessageBoard{
   
   // Log in.
   rpc Login(LoginRequest) returns (LoginResponse);
+
+  // s2s
+  rpc AddUser(User) returns (google.protobuf.Empty);
+  rpc AddMessage(Message) returns (google.protobuf.Empty);
+  rpc AddTopic(Topic) returns (google.protobuf.Empty);
+  rpc AddLike(LikeMessageRequest) returns (google.protobuf.Empty);
+  rpc GetLikes(google.protobuf.Empty) returns (GetLikesResponse);
+
+  // kliče nadzorna ravnina
+  rpc FetchFrom(FetchFromRequest) returns (google.protobuf.Empty);
+  rpc SetSlaves(SetSlavesRequest) returns (google.protobuf.Empty);
+  rpc Ping(google.protobuf.Empty) returns (google.protobuf.Empty);
+}
+message FetchFromRequest {
+        repeated string masters = 1;
+}
+message SetSlavesRequest {
+        repeated string slaves = 1;
 }
 
 message CreateUserRequest {
@@ -143,6 +161,10 @@ message GetUsersResponse {
   repeated User users = 1;
 }
 
+message GetLikesResponse {
+  repeated LikeMessageRequest likes = 1;
+}
+
 message GetMessagesRequest {
   int64 topic_id = 1;
   int64 from_message_id = 2; // starting id of the message (0 from beggining)
@@ -182,7 +204,15 @@ message MessageEvent {
 
 // Return the the head and the tail node address
 service ControlPlane {
-  rpc GetClusterState(google.protobuf.Empty) returns (GetClusterStateResponse);
+  rpc GetClusterState (google.protobuf.Empty) returns (GetClusterStateResponse);
+  // s2s, authenticated with s2s_psk, above are unauthenticated
+  rpc ReportNotifyError (NotifyErrorReport) returns (google.protobuf.Empty);
+  rpc ServerAvailable (NodeInfo) returns (google.protobuf.Empty);
+  rpc GetRandomNode (google.protobuf.Empty) returns (NodeInfo); // IN CHAIN!
+}
+
+message NotifyErrorReport {
+        string slave = 1;
 }
 
 message GetClusterStateResponse {

@@ -12,11 +12,15 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"sync"
+	"sync/atomic"
+	"log"
 
 	pb "4a.si/razpravljalnica/grpc/protobufRazpravljalnica"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -28,7 +32,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// TODO: move to env variable
+// TO DO: move to env variable
 var jwtSecret = []byte("CHANGE_ME_SUPER_SECRET_KEY")
 
 type Claims struct {
@@ -65,20 +69,10 @@ type Message struct {
 }
 
 type MessageLike struct {
-	ID        int64 `gorm:"primaryKey"`
-	MessageID int64 `gorm:"not null;index"`
-	UserID    int64 `gorm:"not null;index"`
+	MessageID int64 `gorm:"primaryKey"`
+	UserID    int64 `gorm:"primeryKey"`
 
-	_ struct{} `gorm:"uniqueIndex:idx_message_user"` // (user can like a message only once)
-}
-
-type SubscriptionNode struct {
-	ID      string
-	Address string
-}
-
-var subscriptionNodes = []SubscriptionNode{
-	{ID: "node-1", Address: "localhost:9876"},
+	// _ struct{} `gorm:"uniqueIndex:idx_message_user"` // (user can like a message only once)
 }
 
 type server struct {
@@ -87,13 +81,22 @@ type server struct {
 	db *gorm.DB
 	// lastUserID   int64
 	// mu_userCount sync.Mutex
-	master string // master server URL, "" if i am write node
+	masters []string // masters servers URLs. if len(s.masters) == 0, i am head node. updated on every FetchFrom.
+	slaves []string // slaves servers URLs, just subscribers
+	controlplane string // control plane URL, "" for single server setup
+	cpc *ControlPlaneClient
+	s2s_psk string
+	naročniki map[chan pb.MessageEvent]pb.SubscribeTopicRequest
+	naročniki_lock sync.RWMutex
+	event_št atomic.Int64
+	url string // own url
 }
 
-func Server(url string, master string) {
-
-	// database z uporabniki
-	db, err := gorm.Open(sqlite.Open("baza.db"), &gorm.Config{})
+func Server(url string, controlplane string, s2s_psk string, myurl string, dbfile string) {
+	if dbfile == "" {
+		dbfile = ":memory:"
+	}
+	db, err := gorm.Open(sqlite.Open(dbfile), &gorm.Config{})
 	if err != nil {
 		panic("failed to connect to the database")
 	}
@@ -104,12 +107,12 @@ func Server(url string, master string) {
 		panic("failed to migrate database")
 	}
 
+	s := &server{db: db, controlplane: controlplane, s2s_psk: s2s_psk, url:myurl} // creates a new value of type server, assigns field db to the vasiable users_db (a *gorm DB)
 	// pripravimo strežnik gRPC
 	grpcServer := grpc.NewServer(
-		grpc.UnaryInterceptor(authInterceptor),
+		grpc.ChainUnaryInterceptor(logInterceptor(s), authInterceptor(s)),
 	)
 
-	s := &server{db: db, master: master} // creates a new value of type server, assigns field db to the vasiable users_db (a *gorm DB)
 	pb.RegisterMessageBoardServer(grpcServer, s)
 
 	// izpišemo ime strežnika
@@ -122,15 +125,260 @@ func Server(url string, master string) {
 	if err != nil {
 		panic(err)
 	}
-	fmt.Printf("gRPC server listening at %v%v\n", hostName, url)
-	// začnemo s streženjem
-	if err := grpcServer.Serve(listener); err != nil {
-		panic(err)
+	fmt.Printf("gRPC server listening at hostname %v, url %v\n", hostName, url)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func () {
+		if err := grpcServer.Serve(listener); err != nil {
+			panic(err)
+		}
+		wg.Done()
+	}()
+	s.cpc = nil
+	var cpc *ControlPlaneClient
+	if controlplane != "" {
+		if s2s_psk == "" {
+			log.Fatal("s2s_psk ne sme biti prazen niz")
+		}
+		cpc, err := NewControlPlaneClient(controlplane, s2s_psk)
+		if err != nil {
+			panic(err)
+		}
+		err = cpc.ServerAvailable(myurl)
+		if err != nil {
+			panic(err)
+		}
+	}
+	s.cpc = cpc // !!! connection leak !!!! nikoli ne pokličemo cpc.Close!
+	wg.Wait()
+}
+func (s *server) FetchFrom (ctx context.Context, req *pb.FetchFromRequest) (*emptypb.Empty, error) {
+	log.Printf("FetchFrom called")
+	userID, err := userIDFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if userID != -1 {
+		log.Printf("FetchFrom: wrong s2s authentication")
+		return nil, status.Error(codes.Unauthenticated, "wrong s2s authentication")
+	}
+	log.Printf("FetchFrom handler: auth successful")
+	for _, masterurl := range req.Masters {
+		c, err := NewClient(masterurl)
+		if err != nil {
+			return nil, err
+		}
+		c.token = s.s2s_psk
+		log.Printf("FetchFrom: created a client for ", masterurl)
+		defer c.Close()
+		{
+			res, err := c.api.GetUsers(c.ctx(), &emptypb.Empty{})
+			if err != nil {
+				return nil, err
+			}
+			for _, u := range res.Users {
+				_, err := s.AddUser(ctx, u)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+		{
+			res, err := c.api.ListTopics(c.ctx(), &emptypb.Empty{})
+			if err != nil {
+				return nil, err
+			}
+			for _, t := range res.Topics {
+				_, err := s.AddTopic(ctx, t)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+		{
+			res, err := c.api.GetLikes(c.ctx(), &emptypb.Empty{})
+			if err != nil {
+				return nil, err
+			}
+			for _, l := range res.Likes {
+				_, err := s.AddLike(ctx, l)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+		{
+			res, err := c.api.GetMessages(c.ctx(), &pb.GetMessagesRequest{
+				TopicId: -1,
+				FromMessageId: -1,
+				Limit: 99999999,
+			})
+			if err != nil {
+				return nil, err
+			}
+			for _, m := range res.Messages {
+				_, err := s.AddMessage(ctx, m)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+	s.masters = req.Masters
+	return &emptypb.Empty{}, nil
+}
+func (s *server) SetSlaves (ctx context.Context, req *pb.SetSlavesRequest) (*emptypb.Empty, error) {
+	log.Printf("SetSlaves called")
+	userID, err := userIDFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if userID != -1 {
+		log.Printf("SetSlaves: returning wrong s2s auth")
+		return nil, status.Error(codes.Unauthenticated, "wrong s2s authentication")
+	}
+	s.slaves = req.Slaves
+	log.Printf("SetSlaves set slaves, auth successful")
+	return &emptypb.Empty{}, nil
+}
+func (s *server) s2sctx() context.Context {
+	md := metadata.New(nil)
+	md.Set("authorization", s.s2s_psk)
+	return metadata.NewOutgoingContext(context.Background(), md)
+}
+func (s *server) handle_notify_err (err error, slave string) {
+	// TODO notify control plane
+}
+func (s *server) NotifySlavesUser (user *pb.User) {
+	for _, slave := range s.slaves {
+		client, err := NewClient(slave)
+		if err != nil {
+			s.handle_notify_err(err, slave)
+		}
+		defer client.Close()
+		client.token = s.s2s_psk
+		err = client.AddUser(user)
+		if err != nil {
+			s.handle_notify_err(err, slave)
+		}
 	}
 }
-
+func (s *server) NotifySlavesMessage (message *pb.Message) {
+	for _, slave := range s.slaves {
+		client, err := NewClient(slave)
+		if err != nil {
+			s.handle_notify_err(err, slave)
+		}
+		defer client.Close()
+		client.token = s.s2s_psk
+		err = client.AddMessage(message)
+		if err != nil {
+			s.handle_notify_err(err, slave)
+		}
+	}
+	št_dogodka := s.event_št.Add(1)
+	s.obvesti_naročnike(pb.MessageEvent{SequenceNumber: št_dogodka, Op: pb.OpType_OP_POST, Message: message, EventAt: timestamppb.Now()})
+	št_dogodka = s.event_št.Add(1)
+	s.obvesti_naročnike(pb.MessageEvent{SequenceNumber: št_dogodka, Op: pb.OpType_OP_LIKE, Message: message, EventAt: timestamppb.Now()})
+	št_dogodka = s.event_št.Add(1)
+	s.obvesti_naročnike(pb.MessageEvent{SequenceNumber: št_dogodka, Op: pb.OpType_OP_UPDATE, Message: message, EventAt: timestamppb.Now()})
+}
+func (s *server) NotifySlavesTopic (topic *pb.Topic) {
+	for _, slave := range s.slaves {
+		client, err := NewClient(slave)
+		if err != nil {
+			s.handle_notify_err(err, slave)
+		}
+		defer client.Close()
+		client.token = s.s2s_psk
+		err = client.AddTopic(topic)
+		if err != nil {
+			s.handle_notify_err(err, slave)
+		}
+	}
+}
+func (s *server) NotifySlavesLike (like *pb.LikeMessageRequest) {
+	for _, slave := range s.slaves {
+		client, err := NewClient(slave)
+		if err != nil {
+			s.handle_notify_err(err, slave)
+		}
+		defer client.Close()
+		client.token = s.s2s_psk
+		err = client.AddLike(like)
+		if err != nil {
+			s.handle_notify_err(err, slave)
+		}
+	}
+}
+func (s *server) AddUser(ctx context.Context, req *pb.User) (*emptypb.Empty, error) {
+	userID, err := userIDFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if userID != -1 {
+		return nil, status.Error(codes.Unauthenticated, "wrong s2s authentication")
+	}
+	user := &User{Name: req.Name, ID: req.Id}
+	if err := s.db.WithContext(ctx).
+		Clauses(clause.OnConflict{UpdateAll: true,}).Create(user).Error; err != nil {
+		return nil, err
+	}
+	s.NotifySlavesUser(req)
+	return &emptypb.Empty{}, nil
+}
+func (s *server) AddMessage(ctx context.Context, req *pb.Message) (*emptypb.Empty, error) {
+	userID, err := userIDFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if userID != -1 {
+		return nil, status.Error(codes.Unauthenticated, "wrong s2s authentication")
+	}
+	message := &Message{ID: req.Id, TopicID: req.TopicId, UserID: req.UserId, Text: req.Text, CreatedAt: req.CreatedAt.AsTime(), Likes: req.Likes}
+	if err := s.db.WithContext(ctx).
+		Clauses(clause.OnConflict{UpdateAll: true,}).Create(message).Error; err != nil {
+		return nil, err
+	}
+	s.NotifySlavesMessage(req)
+	return &emptypb.Empty{}, nil
+}
+func (s *server) AddLike(ctx context.Context, req *pb.LikeMessageRequest) (*emptypb.Empty, error) {
+	userID, err := userIDFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if userID != -1 {
+		return nil, status.Error(codes.Unauthenticated, "wrong s2s authentication")
+	}
+	like := &MessageLike{MessageID: req.MessageId, UserID: req.UserId}
+	if err := s.db.WithContext(ctx).
+		Clauses(clause.OnConflict{UpdateAll: true,}).Create(like).Error; err != nil {
+		return nil, err
+	}
+	s.NotifySlavesLike(req)
+	return &emptypb.Empty{}, nil
+}
+func (s *server) AddTopic(ctx context.Context, req *pb.Topic) (*emptypb.Empty, error) {
+	userID, err := userIDFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if userID != -1 {
+		return nil, status.Error(codes.Unauthenticated, "wrong s2s authentication")
+	}
+	topic := &Topic{ID: req.Id, Name: req.Name}
+	if err := s.db.WithContext(ctx).
+		Clauses(clause.OnConflict{UpdateAll: true,}).Create(topic).Error; err != nil {
+		return nil, err
+	}
+	s.NotifySlavesTopic(req)
+	return &emptypb.Empty{}, nil
+}
 func (s *server) CreateUser(ctx context.Context, req *pb.CreateUserRequest) (*pb.User, error) {
-
+	if len(s.masters) != 0 {
+		return nil, status.Error(codes.Internal, "write zahteva poslala na ne-head node v verigi")
+	}
 	user := &User{Name: req.Name}
 	// WithContext - if client cancels the request the db operation is canceled too
 	if err := s.db.WithContext(ctx).Create(user).Error; err != nil {
@@ -141,19 +389,23 @@ func (s *server) CreateUser(ctx context.Context, req *pb.CreateUserRequest) (*pb
 }
 
 func (s *server) CreateTopic(ctx context.Context, req *pb.CreateTopicRequest) (*pb.Topic, error) {
-
 	topic := &Topic{Name: req.Name}
-
+	if len(s.masters) != 0 {
+		return nil, status.Error(codes.Internal, "write zahteva poslala na ne-head node v verigi")
+	}
 	if err := s.db.WithContext(ctx).Create(topic).Error; err != nil {
 		return nil, err
 	}
 
-	return &pb.Topic{Id: topic.ID, Name: topic.Name}, nil
+	pbtopic := &pb.Topic{Id: topic.ID, Name: topic.Name}
+	s.NotifySlavesTopic(pbtopic)
+
+	return pbtopic, nil
 
 }
 
 // --------------- ????
-// TODO: napiši teste(?) za slabe stvari (ko avtentikacija ne dela oz. uspešno dela in zavrne)
+// TO DO: napiši teste(?) za slabe stvari (ko avtentikacija ne dela oz. uspešno dela in zavrne)
 func generateJWT(userID int64) (string, error) {
 	claims := Claims{
 		UserID: userID,
@@ -190,52 +442,60 @@ func parseJWT(tokenStr string) (int64, error) {
 
 	return claims.UserID, nil
 }
+func logInterceptor (s *server) grpc.UnaryServerInterceptor {
+	return func (ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		log.Printf("logInterceptor request", info, req)
+		res, err := handler(ctx, req)
+		log.Printf("logInterceptor response", res, err)
+		return res, err
+	}
+}
+func authInterceptor (s *server) grpc.UnaryServerInterceptor {
+	return func (
+		ctx context.Context,
+		req any,
+		info *grpc.UnaryServerInfo,
+		handler grpc.UnaryHandler,
+	) (any, error) {
+		switch info.FullMethod {
+		case
+			"/razpravljalnica.MessageBoard/Login",
+			"/razpravljalnica.MessageBoard/CreateUser":
+			return handler(ctx, req)
+		}
+		// everything below REQUIRES authentication
+		md, ok := metadata.FromIncomingContext(ctx)
+		if !ok {
+			return nil, status.Error(codes.Unauthenticated, "missing metadata")
+		}
+		authHeader := md.Get("authorization")
+		if len(authHeader) == 0 {
+			return nil, status.Error(codes.Unauthenticated, fmt.Sprintf("missing authorization header in streznik.go authInterceptor info=%v req=%v", info.FullMethod, req))
+		}
+		parts := strings.SplitN(authHeader[0], " ", 2)
+		if len(parts) != 2 || parts[0] != "Bearer" {
+			return nil, status.Error(codes.Unauthenticated, "invalid authorization format")
+		}
+		if parts[1] == s.s2s_psk {
+			existingMD, _ := metadata.FromIncomingContext(ctx)
+			existingMD = existingMD.Copy()
+			existingMD.Set("user-id", "-1")
+			ctx = metadata.NewIncomingContext(ctx, existingMD)
+			return handler(ctx, req)
+		}
+		userID, err := parseJWT(parts[1])
+		if err != nil {
+			return nil, status.Error(codes.Unauthenticated, "invalid token")
+		}
 
-func authInterceptor(
-	ctx context.Context,
-	req any,
-	info *grpc.UnaryServerInfo,
-	handler grpc.UnaryHandler,
-) (any, error) {
+		existingMD, _ := metadata.FromIncomingContext(ctx)
+		existingMD = existingMD.Copy()
+		existingMD.Set("user-id", strconv.FormatInt(userID, 10))
 
-	switch info.FullMethod {
-	case
-		"/razpravljalnica.MessageBoard/CreateUser",
-		"/razpravljalnica.MessageBoard/Login":
+		ctx = metadata.NewIncomingContext(ctx, existingMD)
 
-		fmt.Println(">>> allow-listed method, skipping auth")
 		return handler(ctx, req)
 	}
-
-	// everything below REQUIRES authentication
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
-		return nil, status.Error(codes.Unauthenticated, "missing metadata")
-	}
-
-	authHeader := md.Get("authorization")
-	if len(authHeader) == 0 {
-		fmt.Println(">>> authInterceptor called for:", info.FullMethod)
-		return nil, status.Error(codes.Unauthenticated, "missing authorization header")
-	}
-
-	parts := strings.SplitN(authHeader[0], " ", 2)
-	if len(parts) != 2 || parts[0] != "Bearer" {
-		return nil, status.Error(codes.Unauthenticated, "invalid authorization format")
-	}
-
-	userID, err := parseJWT(parts[1])
-	if err != nil {
-		return nil, status.Error(codes.Unauthenticated, "invalid token")
-	}
-
-	existingMD, _ := metadata.FromIncomingContext(ctx)
-	existingMD = existingMD.Copy()
-	existingMD.Set("user-id", strconv.FormatInt(userID, 10))
-
-	ctx = metadata.NewIncomingContext(ctx, existingMD)
-
-	return handler(ctx, req)
 }
 
 func userIDFromContext(ctx context.Context) (int64, error) {
@@ -248,7 +508,6 @@ func userIDFromContext(ctx context.Context) (int64, error) {
 	if len(values) == 0 {
 		return 0, status.Error(codes.Unauthenticated, "user not authenticated")
 	}
-
 	id, err := strconv.ParseInt(values[0], 10, 64) // ker oblike values = []string{"67"}
 	if err != nil {
 		return 0, status.Error(codes.Unauthenticated, "invalid user id")
@@ -257,7 +516,9 @@ func userIDFromContext(ctx context.Context) (int64, error) {
 	return id, nil
 }
 
-// ----------- ???
+func (s *server) Ping (ctx context.Context, req *emptypb.Empty) (*emptypb.Empty, error) {
+	return &emptypb.Empty{}, nil
+}
 
 func (s *server) Login( // poglej, explain, ...
 	ctx context.Context,
@@ -284,7 +545,9 @@ func (s *server) Login( // poglej, explain, ...
 }
 
 func (s *server) PostMessage(ctx context.Context, req *pb.PostMessageRequest) (*pb.Message, error) {
-
+	if len(s.masters) != 0 {
+		return nil, status.Error(codes.Internal, "write zahteva poslala na ne-head node v verigi")
+	}
 	userID, err := userIDFromContext(ctx)
 	if err != nil {
 		return nil, err
@@ -304,20 +567,26 @@ func (s *server) PostMessage(ctx context.Context, req *pb.PostMessageRequest) (*
 		return nil, err
 	}
 
-	return &pb.Message{
+	pbmessage := &pb.Message{
 		Id:        message.ID,
 		TopicId:   message.TopicID,
 		UserId:    message.UserID,
 		Text:      message.Text,
 		Likes:     message.Likes,
 		CreatedAt: timestamppb.New(message.CreatedAt),
-	}, nil
+	}
+
+	s.NotifySlavesMessage(pbmessage)
+
+	return pbmessage, nil
 
 }
 
 func (s *server) UpdateMessage(ctx context.Context, req *pb.UpdateMessageRequest) (*pb.Message, error) {
-
 	// authenticate user
+	if len(s.masters) != 0 {
+		return nil, status.Error(codes.Internal, "write zahteva poslala na ne-head node v verigi")
+	}
 	userID, err := userIDFromContext(ctx)
 	if err != nil {
 		return nil, err
@@ -346,26 +615,33 @@ func (s *server) UpdateMessage(ctx context.Context, req *pb.UpdateMessageRequest
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	return &pb.Message{
+	pbmessage := &pb.Message{
 		Id:        msg.ID,
 		TopicId:   msg.TopicID,
 		UserId:    msg.UserID,
 		Text:      msg.Text,
 		Likes:     msg.Likes,
 		CreatedAt: timestamppb.New(msg.CreatedAt),
-	}, nil
+	}
+
+	s.NotifySlavesMessage(pbmessage)
+
+	return pbmessage, nil
 }
 
 func (s *server) DeleteMessage(ctx context.Context, req *pb.DeleteMessageRequest) (*emptypb.Empty, error) {
 
-	// authenticate user
+	if len(s.masters) != 0 {
+		return nil, status.Error(codes.Internal, "write zahteva poslala na ne-head node v verigi")
+	}
+	// authenticate user or server
 	userID, err := userIDFromContext(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	result := s.db.WithContext(ctx).
-		Where("id = ? AND user_id = ?", req.MessageId, userID).
+		Where("id = ? AND (user_id = ? OR ? = -1)", req.MessageId, userID).
 		Delete(&Message{})
 
 	if result.Error != nil {
@@ -379,12 +655,29 @@ func (s *server) DeleteMessage(ctx context.Context, req *pb.DeleteMessageRequest
 		)
 	}
 
+	for _, slave := range s.slaves {
+		client, err := NewClient(slave)
+		if err != nil {
+			s.handle_notify_err(err, slave)
+		}
+		defer client.Close()
+		client.token = s.s2s_psk
+		client.DeleteMessage(req.MessageId)
+		if err != nil {
+			s.handle_notify_err(err, slave)
+		}
+	}
+	št_dogodka := s.event_št.Add(1)
+	s.obvesti_naročnike(pb.MessageEvent{SequenceNumber: št_dogodka, Op: pb.OpType_OP_DELETE, Message: &pb.Message{Id: req.MessageId, TopicId: req.TopicId, UserId: req.UserId, Text: "", CreatedAt: timestamppb.New(time.Unix(-69420, 0)), Likes: -1}, EventAt: timestamppb.Now()})
 	return &emptypb.Empty{}, nil
 
 }
 
 func (s *server) LikeMessage(ctx context.Context, req *pb.LikeMessageRequest) (*pb.Message, error) {
 
+	if len(s.masters) != 0 {
+		return nil, status.Error(codes.Internal, "write zahteva poslala na ne-head node v verigi")
+	}
 	// authenticate user
 	userID, err := userIDFromContext(ctx)
 	if err != nil {
@@ -431,14 +724,19 @@ func (s *server) LikeMessage(ctx context.Context, req *pb.LikeMessageRequest) (*
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	return &pb.Message{
+	pbmessage := &pb.Message{
 		Id:        msg.ID,
 		TopicId:   msg.TopicID,
 		UserId:    msg.UserID,
 		Text:      msg.Text,
 		Likes:     msg.Likes,
 		CreatedAt: timestamppb.New(msg.CreatedAt),
-	}, nil
+	}
+
+	s.NotifySlavesLike(req)
+	s.NotifySlavesMessage(pbmessage)
+
+	return pbmessage, nil
 }
 
 func generateSubscriptionToken(userID int64, topicIDs []int64) (string, error) {
@@ -454,14 +752,17 @@ func generateSubscriptionToken(userID int64, topicIDs []int64) (string, error) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString(jwtSecret)
 }
-
-func chooseSubscriptionNode(userID int64, topicIDs []int64) SubscriptionNode {
-
-	return subscriptionNodes[0]
+func (s *server) chooseSubscriptionNode(userID int64, topicIDs []int64) (*pb.NodeInfo, error) {
+	if s.cpc == nil {
+		return &pb.NodeInfo{NodeId: s.url, Address: s.url}, nil
+	}
+	res, err := s.cpc.api.GetRandomNode(s.cpc.ctx(), &emptypb.Empty{})
+	if err != nil {
+		return nil, err
+	}
+	return res, nil
 }
-
 func (s *server) GetSubscriptionNode(ctx context.Context, req *pb.SubscriptionNodeRequest) (*pb.SubscriptionNodeResponse, error) {
-
 	// authenticate user
 	userID, err := userIDFromContext(ctx)
 	if err != nil {
@@ -493,11 +794,9 @@ func (s *server) GetSubscriptionNode(ctx context.Context, req *pb.SubscriptionNo
 	}
 
 	// choose the subscription node
-	chosen := chooseSubscriptionNode(userID, req.TopicId)
-
-	node := &pb.NodeInfo{
-		NodeId:  chosen.ID,
-		Address: chosen.Address,
+	node, err := s.chooseSubscriptionNode(userID, req.TopicId)
+	if err != nil {
+		return nil, err
 	}
 
 	// issue a subscription token
@@ -553,8 +852,27 @@ func (s *server) GetUsers(ctx context.Context, req *emptypb.Empty) (*pb.GetUsers
 		Users: allUsers,
 	}, nil
 }
+func (s *server) GetLikes(ctx context.Context, req *emptypb.Empty) (*pb.GetLikesResponse, error) {
+	var likes []MessageLike
 
-// TODO: reindeksiranje messageov. V vsakem topicu posebej začnemo sporočila številčiti z 1
+	if err := s.db.WithContext(ctx).Find(&likes).Error; err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	allLikes := make([]*pb.LikeMessageRequest, 0, len(likes))
+	for _, l := range likes {
+		allLikes = append(allLikes, &pb.LikeMessageRequest{
+			TopicId: -1, // TODO get topicid for message
+			MessageId: l.MessageID,
+			UserId: l.UserID,
+		})
+	}
+
+	return &pb.GetLikesResponse{
+		Likes: allLikes,
+	}, nil
+}
+
+// to do: reindeksiranje messageov. V vsakem topicu posebej začnemo sporočila številčiti z 1
 // (zato tudi pri vsakem update/delete/post message zraven podamo topic ID!!)
 // lahko namesto rewritanja tega samo pri getMessages gledaš najmanjših k indeksov ...
 // najbrž ni tak namen ...
@@ -563,8 +881,13 @@ func (s *server) GetMessages(ctx context.Context, req *pb.GetMessagesRequest) (*
 
 	var messages []Message
 
+	topicclause := "topic_id = ?"
+	if req.TopicId == -1 {
+		topicclause = "(topic_id = ? OR 1 = 1)"
+	}
+
 	err := s.db.WithContext(ctx).
-		Where("topic_id = ?", req.TopicId).
+		Where(topicclause, req.TopicId).
 		Where(
 			"( ? = 0 OR id > ? )", // ker ima vsak message qunique ID ne glede na topic ...
 			req.FromMessageId,
@@ -594,4 +917,39 @@ func (s *server) GetMessages(ctx context.Context, req *pb.GetMessagesRequest) (*
 	return &pb.GetMessagesResponse{
 		Messages: allMessages,
 	}, nil
+}
+func (s *server) obvesti_naročnike (dogodek pb.MessageEvent) {
+	s.naročniki_lock.Lock()
+	defer s.naročniki_lock.Unlock()
+	naročniki_kopija := make(map[chan pb.MessageEvent]pb.SubscribeTopicRequest)
+	for k, v := range s.naročniki {
+		naročniki_kopija[k] = v
+	}
+	for naročnik := range naročniki_kopija {
+		select {
+			case naročnik <- dogodek:
+			default:
+				log.Println("odklapljam naročnika, ker ima poln medpomnilnik")
+				delete(s.naročniki, naročnik)
+				close(naročnik)
+		}
+	}
+}
+func (s *server) SubscribeTopic (req *pb.SubscribeTopicRequest, stream grpc.ServerStreamingServer[pb.MessageEvent]) (error) {
+	s.naročniki_lock.Lock()
+	naročnina := make(chan pb.MessageEvent, 16)
+	s.naročniki[naročnina] = *req
+	s.naročniki_lock.Unlock()
+	defer func () {
+		s.naročniki_lock.Lock()
+		delete(s.naročniki, naročnina)
+		s.naročniki_lock.Unlock()
+		close(naročnina)
+	}()
+	for event := range naročnina {
+		if err := stream.Send(&event); err != nil {
+			return err
+		}
+	}
+	return nil
 }
