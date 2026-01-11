@@ -15,7 +15,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"log"
-
+	"slices"
 	pb "4a.si/razpravljalnica/grpc/protobufRazpravljalnica"
 
 	"gorm.io/driver/sqlite"
@@ -107,7 +107,7 @@ func Server(url string, controlplane string, s2s_psk string, myurl string, dbfil
 		panic("failed to migrate database")
 	}
 
-	s := &server{db: db, controlplane: controlplane, s2s_psk: s2s_psk, url:myurl} // creates a new value of type server, assigns field db to the vasiable users_db (a *gorm DB)
+	s := &server{db: db, controlplane: controlplane, s2s_psk: s2s_psk, url:myurl, naročniki: make(map[chan pb.MessageEvent]pb.SubscribeTopicRequest)} // creates a new value of type server, assigns field db to the vasiable users_db (a *gorm DB)
 	// pripravimo strežnik gRPC
 	grpcServer := grpc.NewServer(
 		grpc.ChainUnaryInterceptor(logInterceptor(s), authInterceptor(s)),
@@ -384,8 +384,9 @@ func (s *server) CreateUser(ctx context.Context, req *pb.CreateUserRequest) (*pb
 	if err := s.db.WithContext(ctx).Create(user).Error; err != nil {
 		return nil, err
 	}
-
-	return &pb.User{Id: user.ID, Name: user.Name}, nil
+	userpb := &pb.User{Id: user.ID, Name: user.Name}
+	s.NotifySlavesUser(userpb)
+	return userpb, nil
 }
 
 func (s *server) CreateTopic(ctx context.Context, req *pb.CreateTopicRequest) (*pb.Topic, error) {
@@ -444,9 +445,9 @@ func parseJWT(tokenStr string) (int64, error) {
 }
 func logInterceptor (s *server) grpc.UnaryServerInterceptor {
 	return func (ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		log.Printf("logInterceptor request", info, req)
+		// log.Printf("logInterceptor request", info, req)
 		res, err := handler(ctx, req)
-		log.Printf("logInterceptor response", res, err)
+		// log.Printf("logInterceptor response", res, err)
 		return res, err
 	}
 }
@@ -538,7 +539,7 @@ func (s *server) Login( // poglej, explain, ...
 	if err != nil {
 		return nil, status.Error(codes.Internal, "could not generate token")
 	}
-
+	log.Printf("Login: %v", req)
 	return &pb.LoginResponse{
 		Token: token,
 	}, nil
@@ -631,17 +632,16 @@ func (s *server) UpdateMessage(ctx context.Context, req *pb.UpdateMessageRequest
 
 func (s *server) DeleteMessage(ctx context.Context, req *pb.DeleteMessageRequest) (*emptypb.Empty, error) {
 
-	if len(s.masters) != 0 {
-		return nil, status.Error(codes.Internal, "write zahteva poslala na ne-head node v verigi")
-	}
 	// authenticate user or server
 	userID, err := userIDFromContext(ctx)
 	if err != nil {
 		return nil, err
 	}
-
+	if len(s.masters) != 0 && userID != -1 {
+		return nil, status.Error(codes.Internal, "write zahteva poslala na ne-head node v verigi")
+	}
 	result := s.db.WithContext(ctx).
-		Where("id = ? AND (user_id = ? OR ? = -1)", req.MessageId, userID).
+		Where("id = ? AND (user_id = ? OR ? = -1)", req.MessageId, userID, userID).
 		Delete(&Message{})
 
 	if result.Error != nil {
@@ -763,43 +763,28 @@ func (s *server) chooseSubscriptionNode(userID int64, topicIDs []int64) (*pb.Nod
 	return res, nil
 }
 func (s *server) GetSubscriptionNode(ctx context.Context, req *pb.SubscriptionNodeRequest) (*pb.SubscriptionNodeResponse, error) {
-	// authenticate user
 	userID, err := userIDFromContext(ctx)
 	if err != nil {
 		return nil, err
 	}
-
-	if len(req.TopicId) == 0 {
-		return nil, status.Error(
-			codes.InvalidArgument,
-			"no topics provided",
-		)
-	}
-
 	var count int64
 	if err := s.db.WithContext(ctx).
 		Model(&Topic{}).
 		Where("id IN ?", req.TopicId).
 		Count(&count).
 		Error; err != nil {
-
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-
 	if count != int64(len(req.TopicId)) {
 		return nil, status.Error(
 			codes.NotFound,
 			"one or more topics do not exist",
 		)
 	}
-
-	// choose the subscription node
 	node, err := s.chooseSubscriptionNode(userID, req.TopicId)
 	if err != nil {
 		return nil, err
 	}
-
-	// issue a subscription token
 	subToken, err := generateSubscriptionToken(userID, req.TopicId)
 	if err != nil {
 		return nil, status.Error(
@@ -807,7 +792,6 @@ func (s *server) GetSubscriptionNode(ctx context.Context, req *pb.SubscriptionNo
 			"failed to generate subscription token",
 		)
 	}
-
 	return &pb.SubscriptionNodeResponse{
 		SubscribeToken: subToken,
 		Node:           node,
@@ -925,13 +909,18 @@ func (s *server) obvesti_naročnike (dogodek pb.MessageEvent) {
 	for k, v := range s.naročniki {
 		naročniki_kopija[k] = v
 	}
-	for naročnik := range naročniki_kopija {
+	log.Printf("OBVESTI NAROČNIKE %v", dogodek)
+	for nchan, ninfo := range naročniki_kopija {
+		log.Printf("NAROČNIK %v %v", ninfo, nchan)
+		if !slices.Contains(ninfo.TopicId, dogodek.Message.TopicId) && len(ninfo.TopicId) == 0 || ninfo.FromMessageId < dogodek.Message.Id {
+			// continue
+		}
 		select {
-			case naročnik <- dogodek:
+			case nchan <- dogodek:
 			default:
 				log.Println("odklapljam naročnika, ker ima poln medpomnilnik")
-				delete(s.naročniki, naročnik)
-				close(naročnik)
+				delete(s.naročniki, nchan)
+				close(nchan)
 		}
 	}
 }
@@ -947,6 +936,7 @@ func (s *server) SubscribeTopic (req *pb.SubscribeTopicRequest, stream grpc.Serv
 		close(naročnina)
 	}()
 	for event := range naročnina {
+		log.Printf("POŠILJAM DOGODEK NAROČNIKU %v", event)
 		if err := stream.Send(&event); err != nil {
 			return err
 		}

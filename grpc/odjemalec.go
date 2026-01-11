@@ -43,7 +43,7 @@ func (c *ControlPlaneClient) ctx () context.Context {
 	}
 	return metadata.NewOutgoingContext(context.Background(), md)
 }
-func (c *ControlPlaneClient) GetClusterState (name string) (string, string, error) {
+func (c *ControlPlaneClient) GetClusterState () (string, string, error) {
 	res, err := c.api.GetClusterState(context.Background(), &emptypb.Empty{})
 	if err != nil {
 		return "", "", err
@@ -68,25 +68,36 @@ func (c *ControlPlaneClient) ServerAvailable (url string) error {
 // Client wraps gRPC connection and JWT
 type Client struct {
 	conn  *grpc.ClientConn
-	api   pb.MessageBoardClient
+	tailconn *grpc.ClientConn
+	api	pb.MessageBoardClient // head
+	tail	pb.MessageBoardClient // tail
 	token string
+	cpurl string
+	cpc *ControlPlaneClient
+	userid int64
 }
 
 func ClientMain(url string, uName string) {
-	a, err := NewClient(url)
+	a, err := NewClientCP(url)
 	if err != nil {
 		panic(err)
 	}
 	defer a.Close()
 
-	b, err := NewClient(url)
+	b, err := NewClientCP(url)
 	if err != nil {
 		panic(err)
 	}
 	defer b.Close()
 
-	aID := a.CreateUser("anton")
-	bID := b.CreateUser("Barbara")
+	aID, err := a.CreateUser("anton")
+	if err != nil {
+		log.Fatal("CreateUser: %v", err)
+	}
+	bID, err := b.CreateUser("Barbara")
+	if err != nil {
+		log.Fatal("CreateUser: %v", err)
+	}
 
 	a.Login(aID)
 	b.Login(bID)
@@ -108,16 +119,14 @@ func ClientMain(url string, uName string) {
 	b.PostMessage(topicID, "actually works")
 
 	fmt.Println("\n--- A likes B's message")
-	a.LikeMessage(topicID, bMsgID)
-	a.LikeMessage(topicID, bMsgID)
-	a.LikeMessage(topicID, bMsgID)
-	a.LikeMessage(topicID, bMsgID)
-	a.LikeMessage(topicID, bMsgID)
-	a.LikeMessage(topicID, bMsgID)
-	a.LikeMessage(topicID, bMsgID)
-	a.LikeMessage(topicID, bMsgID)
-	a.LikeMessage(topicID, bMsgID)
-	b.LikeMessage(topicID, bMsgID)
+	err = a.LikeMessage(topicID, bMsgID)
+	if err != nil {
+		panic(err)
+	}
+	err = a.LikeMessage(topicID, bMsgID)
+	if err == nil {
+		panic("pričakoval sem napako")
+	}
 	a.LikeMessage(topicID, bMsgID2)
 
 	fmt.Println("\n--- A updates their message ---")
@@ -135,13 +144,16 @@ func ClientMain(url string, uName string) {
 
 	a.GetUsers()
 
-	c, err := NewClient(url)
+	c, err := NewClientCP(url)
 	if err != nil {
 		panic(err)
 	}
 	defer c.Close()
 
-	cID := c.CreateUser("Cecilija")
+	cID, err := c.CreateUser("Cecilija")
+	if err != nil {
+		log.Fatal("CreateUser: %v", err)
+	}
 	c.Login(cID)
 
 	c.GetUsers()
@@ -149,11 +161,42 @@ func ClientMain(url string, uName string) {
 	b.GetMessages(topicID, 0, 10)
 	fmt.Println("\n --- \n")
 	b.GetMessages(topicID, bMsgID2, 4)
-
 }
-
+func NewClientCP(addr string) (*Client, error) {
+	cpc, err := NewControlPlaneClient(addr, "odjemalec")
+	if err != nil {
+		return nil, err
+	}
+	head, tail, err := cpc.GetClusterState()
+	if err != nil {
+		return nil, err
+	}
+	headconn, err := grpc.Dial(
+		head,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		return nil, err
+	}
+	tailconn, err := grpc.Dial(
+		tail,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		return nil, err
+	}
+	c := &Client{
+		conn: headconn,
+		tailconn: tailconn,
+		api:  pb.NewMessageBoardClient(headconn),
+		tail:  pb.NewMessageBoardClient(tailconn),
+		cpc: cpc,
+		cpurl: addr,
+	}
+	return c, nil
+}
 func NewClient(addr string) (*Client, error) {
-	log.Printf("NewClient called with ", addr)
+	// log.Printf("NewClient called with ", addr)
 	conn, err := grpc.Dial(
 		addr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -161,17 +204,15 @@ func NewClient(addr string) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	return &Client{
+	c := &Client{
 		conn: conn,
 		api:  pb.NewMessageBoardClient(conn),
-	}, nil
+	}
+	return c, nil
 }
-
 func (c *Client) Close() {
 	c.conn.Close()
 }
-
 func (c *Client) ctx() context.Context {
 	md := metadata.New(nil)
 	if c.token != "" {
@@ -179,22 +220,21 @@ func (c *Client) ctx() context.Context {
 	}
 	return metadata.NewOutgoingContext(context.Background(), md)
 }
-
-func (c *Client) CreateUser(name string) int64 {
+func (c *Client) CreateUser(name string) (int64, error) {
 	res, err := c.api.CreateUser(context.Background(), &pb.CreateUserRequest{Name: name})
 	if err != nil {
-		log.Fatal(err)
+		return 0, err
 	}
-	fmt.Println("Created user:", res)
-	return res.Id
+	return res.Id, nil
 }
-func (c *Client) Login(userID int64) {
+func (c *Client) Login(userID int64) error {
 	res, err := c.api.Login(context.Background(), &pb.LoginRequest{UserId: userID})
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	c.token = res.Token
-	fmt.Println("Logged in, JWT acquired")
+	c.userid = userID
+	return nil
 }
 
 func (c *Client) CreateTopic(name string) int64 {
@@ -202,7 +242,6 @@ func (c *Client) CreateTopic(name string) int64 {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println("Created topic:", res)
 	return res.Id
 }
 
@@ -234,15 +273,15 @@ func (c *Client) PostMessage(topicID int64, text string) int64 {
 	return res.Id
 }
 
-func (c *Client) LikeMessage(topicID, messageID int64) {
-	res, err := c.api.LikeMessage(c.ctx(), &pb.LikeMessageRequest{
+func (c *Client) LikeMessage(topicID, messageID int64) error {
+	_, err := c.api.LikeMessage(c.ctx(), &pb.LikeMessageRequest{
 		TopicId:   topicID,
 		MessageId: messageID,
 	})
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
-	fmt.Println("Liked message:", res)
+	return nil
 }
 
 func (c *Client) UpdateMessage(topicID, messageID int64, text string) {
@@ -259,12 +298,12 @@ func (c *Client) UpdateMessage(topicID, messageID int64, text string) {
 
 func (c *Client) DeleteMessage(messageID int64) {
 	_, err := c.api.DeleteMessage(c.ctx(), &pb.DeleteMessageRequest{
+		UserId: c.userid,
 		MessageId: messageID,
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println("Deleted message")
 }
 
 func (c *Client) GetSubscriptionNode(topicIDs []int64) (*pb.SubscriptionNodeResponse, error) {
@@ -273,20 +312,20 @@ func (c *Client) GetSubscriptionNode(topicIDs []int64) (*pb.SubscriptionNodeResp
 		TopicId: topicIDs,
 	}
 
-	res, err := c.api.GetSubscriptionNode(c.ctx(), req)
+	res, err := c.tail.GetSubscriptionNode(c.ctx(), req)
 	if err != nil {
 		return nil, err
 	}
 
-	fmt.Printf("Received subscription node: ID=%s, Address=%s\n", res.Node.NodeId, res.Node.Address)
-	fmt.Printf("Subscribe token: %s\n", res.SubscribeToken)
+	// fmt.Printf("Received subscription node: ID=%s, Address=%s\n", res.Node.NodeId, res.Node.Address)
+	// fmt.Printf("Subscribe token: %s\n", res.SubscribeToken)
 
 	return res, nil
 }
 
 func (c *Client) ListTopics() {
 
-	res, err := c.api.ListTopics(c.ctx(), &emptypb.Empty{})
+	res, err := c.tail.ListTopics(c.ctx(), &emptypb.Empty{})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -295,20 +334,22 @@ func (c *Client) ListTopics() {
 	}
 }
 
-func (c *Client) GetUsers() {
-
-	res, err := c.api.GetUsers(c.ctx(), &emptypb.Empty{})
+func (c *Client) GetUsers() (map[int64]string, error) {
+	res, err := c.tail.GetUsers(c.ctx(), &emptypb.Empty{})
 	if err != nil {
 		log.Fatal(err)
 	}
+	r := make(map[int64]string)
 	for _, u := range res.Users {
-		fmt.Printf("User ID: %d, User name: %s\n", u.Id, u.Name)
+		// fmt.Printf("User ID: %d, User name: %s\n", u.Id, u.Name)
+		r[u.Id] = u.Name
 	}
+	return r, nil
 }
 
 func (c *Client) GetMessages(topicID int64, fromMessageID int64, limit int32) {
 
-	res, err := c.api.GetMessages(c.ctx(), &pb.GetMessagesRequest{
+	res, err := c.tail.GetMessages(c.ctx(), &pb.GetMessagesRequest{
 		TopicId:       topicID,
 		FromMessageId: fromMessageID,
 		Limit:         limit,

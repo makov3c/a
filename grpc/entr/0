@@ -1,0 +1,1 @@
+ls *.go | entr -pnrs "timeout 3 go run controlplanemain.go controlplaneimpl.go odjemalec.go"

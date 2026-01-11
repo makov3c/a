@@ -1,16 +1,16 @@
 # klepetalnica - ps projekt
-Rok za oddajo: 11. 1. 2026 23:59
+Rok za oddajo: 12. 1. 2026 23:59
 
 ukaze poganjaj v podmapi grpc
 
-Poženi strežnik (če si brez nadzorne ravnine odstrani -c xxx in -m xxx):
+Poženi strežnik:
 ```
-go run grpc.go streznik.go odjemalec.go -l [::]:9875 -c localhost:9870 -m localhost:9875
+go run grpc.go streznik.go odjemalec.go tui.go -l [::]:9875 -r localhost:9870 -m localhost:9875 -d database.db
 ```
 
 Poženi odjemalca:
 ```
-go run grpc.go streznik.go odjemalec.go -r localhost:9875
+go run grpc.go streznik.go odjemalec.go tui.go -r localhost:9875 2> /dev/null
 ```
 
 Prevedi protoc:
@@ -50,3 +50,8 @@ za več logov
 7.2 Pisanje lahko nadaljuješ tako da klikneš Esc, in ponovno izbereš želeni topic
 
 8. Program zapreš z Ctrl+C
+
+development
+===========
+
+glej mapo entr za ukaze za iteracijo z entr(1)

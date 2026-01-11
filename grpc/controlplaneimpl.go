@@ -7,6 +7,7 @@ import (
 	"strings"
 	"math/rand"
 	"sync"
+	"time"
 	pb "4a.si/razpravljalnica/grpc/protobufRazpravljalnica"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -41,9 +42,88 @@ func ControlPlaneServer (bind string, s2s_psk string) error {
 		return err
 	}
 	log.Printf("controlplane server listening at hostname %v, bind url %v", hostName, bind)
-	if err := grpcServer.Serve(listener); err != nil {
-		return err
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func () {
+		if err := grpcServer.Serve(listener); err != nil {
+			panic(err)
+		}
+		wg.Done()
+	}()
+	for {
+		time.Sleep(time.Second)
+		veriga := s.veriga(false)
+		log.Printf("healthcheck: veriga je %v", veriga)
+		for index, url := range veriga {
+			c, err := NewClient(url)
+			if err != nil {
+				log.Printf("healthcheck: NewClient %v failed with %v", url, err)
+				goto ERR
+			}
+			c.token = s.s2s_psk
+			_, err = c.api.Ping(c.ctx(), &emptypb.Empty{})
+			if err != nil {
+				log.Printf("healthcheck: Ping %v failed with %v", url, err)
+				goto ERR
+			}
+			continue
+			ERR:
+			s.veriga_lock.Lock()
+			if index != 0 {
+				c, err := NewClient(veriga[index-1])
+				if err != nil {
+					panic(err)
+				}
+				c.token = s.s2s_psk
+				newslaves := []string{}
+				if index+1 < len(veriga) {
+					newslaves = []string{veriga[index+1]}
+				}
+				_, err = c.api.SetSlaves(c.ctx(), &pb.SetSlavesRequest{Slaves: newslaves})
+				if err != nil {
+					log.Printf("idk, pizdarija SetSlaves: %v", err) // TODO
+				}
+				newmasters := []string{}
+				if index+1 < len(veriga) {
+					newmasters = []string{veriga[index-1]}
+				}
+				if index+1 < len(veriga) {
+					c2, err := NewClient(veriga[index+1])
+					if err != nil {
+						panic(err)
+					}
+					c2.token = s.s2s_psk
+					_, err = c2.api.FetchFrom(c2.ctx(), &pb.FetchFromRequest{Masters: newmasters})
+					if err != nil {
+						log.Printf("idk, pizdarija FetchFrom: %v", err) // TODO
+					}
+					s.strežniki[veriga[index+1]].master = veriga[index-1]
+					s.strežniki[veriga[index-1]].slave = veriga[index+1]
+				} else {
+					s.strežniki[veriga[index-1]].slave = ""
+				}
+			} else { // index == 0
+				s.head = ""
+				if index+1 < len(veriga) {
+					c2, err := NewClient(veriga[index+1])
+					if err != nil {
+						panic(err)
+					}
+					c2.token = s.s2s_psk
+					_, err = c2.api.FetchFrom(c2.ctx(), &pb.FetchFromRequest{Masters: []string{}})
+					if err != nil {
+						log.Printf("#idk, pizdarija FetchFrom: %v", err) // TODO
+					}
+					s.head = veriga[index+1]
+					s.strežniki[veriga[index+1]].master = ""
+				}
+			}
+			delete(s.strežniki, url)
+			s.veriga_lock.Unlock()
+			break
+		}
 	}
+	wg.Wait()
 	return nil // TODO naredi periodičen healthcheck strežnikov v ravnini in pomeči ven tiste, ki so pokvarjeni
 }
 func authInterceptor (s *controlplaneserver) grpc.UnaryServerInterceptor {

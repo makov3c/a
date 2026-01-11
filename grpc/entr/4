@@ -1,0 +1,1 @@
+ls *.go | entr -pnrs "sleep .8; go run grpc.go streznik.go odjemalec.go tui.go -r localhost:9870 -t Anton"
