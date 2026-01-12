@@ -1,18 +1,21 @@
 package main
+
 import (
 	"fmt"
-	"strconv"
 	"log"
-	"time"
+	"strconv"
 	"strings"
+	"time"
+
 	pb "4a.si/razpravljalnica/grpc/protobufRazpravljalnica"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
-	"google.golang.org/protobuf/types/known/emptypb"
-	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
-func StartTUI (addr string) {
+
+func StartTUI(addr string) {
 	app := tview.NewApplication()
 	var client *Client
 	loginForm := tview.NewForm()
@@ -43,11 +46,11 @@ func StartTUI (addr string) {
 	currentTopicID = -1
 	cplanes := []string{addr}
 	loginbuttonfunc := func() {
-		go func () {
+		go func() {
 			var err error
 			client, err = NewClientCP(cplanes)
 			if err != nil {
-				app.QueueUpdateDraw(func(){
+				app.QueueUpdateDraw(func() {
 					loginForm.AddTextView("NewClientCP ni uspel: ", fmt.Sprintf("%v", err), 0, 2, true, false)
 				})
 				return
@@ -59,7 +62,7 @@ func StartTUI (addr string) {
 			}
 			err = client.Login(id)
 			if err != nil {
-				app.QueueUpdateDraw(func(){
+				app.QueueUpdateDraw(func() {
 					loginForm.AddTextView("Prijava ni uspela", fmt.Sprintf("%v", err), 0, 1, true, false)
 				})
 				return
@@ -69,18 +72,18 @@ func StartTUI (addr string) {
 				loginForm.AddTextView("GetUsers failed (poskusi znova): ", fmt.Sprintf("%v", err), 0, 1, true, false)
 				return
 			}
-			app.QueueUpdateDraw(func(){
+			app.QueueUpdateDraw(func() {
 				statusBar.SetText(fmt.Sprintf("Logged in as %s, Ctrl-M to compose", users[id]))
 			})
 			loadTopics(app, client, topicsList)
-			app.QueueUpdateDraw(func(){
+			app.QueueUpdateDraw(func() {
 				if currentTopicID == -1 {
 					app.SetRoot(root, true).SetFocus(topicsList)
 					messagesList.Clear()
 					messagesList.SetBorder(true).SetTitle(fmt.Sprintf("Select a topic to load messages"))
 				} else {
 					messagesList.Clear()
-					loadMessages(app, client, messagesList, currentTopicID)
+					loadMessages(app, root, client, messagesList, currentTopicID)
 					app.SetRoot(root, true).SetFocus(inputField)
 				}
 			})
@@ -97,7 +100,7 @@ func StartTUI (addr string) {
 			if err != nil {
 				log.Fatal("SubscribeTopic ni uspel", err)
 			}
-			go func () {
+			go func() {
 				for {
 					dogodek, err := stream.Recv()
 					if err != nil {
@@ -109,7 +112,7 @@ func StartTUI (addr string) {
 						continue
 					}
 					loadTopics(app, client, topicsList)
-					loadMessages(app, client, messagesList, currentTopicID)
+					loadMessages(app, root, client, messagesList, currentTopicID)
 				}
 			}()
 		}()
@@ -118,11 +121,11 @@ func StartTUI (addr string) {
 		AddInputField("User ID", "", 10, tview.InputFieldInteger, nil).
 		AddButton("Login", loginbuttonfunc).AddInputField("Username", "", 10, nil, nil).
 		AddButton("Register", func() {
-			go func () {
+			go func() {
 				var err error
 				client, err = NewClientCP(cplanes)
 				if err != nil {
-					app.QueueUpdateDraw(func(){
+					app.QueueUpdateDraw(func() {
 						loginForm.AddTextView("NewClientCP ni uspel: ", fmt.Sprintf("%v", err), 0, 1, true, false)
 					})
 					return
@@ -130,12 +133,12 @@ func StartTUI (addr string) {
 				idStr := loginForm.GetFormItemByLabel("Username").(*tview.InputField).GetText()
 				cID, err := client.CreateUser(idStr)
 				if err != nil {
-					app.QueueUpdateDraw(func(){
+					app.QueueUpdateDraw(func() {
 						loginForm.AddTextView("Neuspešno: ", fmt.Sprintf("%d", cID), 0, 1, true, false)
 					})
 					return
 				}
-				app.QueueUpdateDraw(func(){
+				app.QueueUpdateDraw(func() {
 					loginForm.AddTextView("Uspelo. Vaš ID je", fmt.Sprintf("%d", cID), 0, 1, true, false)
 				})
 			}()
@@ -151,12 +154,12 @@ func StartTUI (addr string) {
 		}
 
 		currentTopicID, _ = strconv.ParseInt(secondary, 10, 64)
-		loadMessages(app, client, messagesList, currentTopicID)
+		loadMessages(app, root, client, messagesList, currentTopicID)
 		app.SetFocus(inputField)
 	})
 
 	inputField.SetDoneFunc(func(key tcell.Key) {
-		go func () {
+		go func() {
 			switch key {
 			case tcell.KeyEnter:
 				if currentTopicID != 0 {
@@ -164,14 +167,14 @@ func StartTUI (addr string) {
 					if text != "" {
 						_, err := client.PostMessage(currentTopicID, text)
 						if err != nil {
-							app.QueueUpdateDraw(func(){
+							app.QueueUpdateDraw(func() {
 								loginForm.AddTextView("PostMessage: ", fmt.Sprintf("%v", err), 0, 1, true, false)
 							})
 							app.Stop()
 							return
 						}
 						inputField.SetText("")
-						loadMessages(app, client, messagesList, currentTopicID)
+						loadMessages(app, root, client, messagesList, currentTopicID)
 					}
 				}
 			case tcell.KeyEsc:
@@ -211,7 +214,7 @@ func StartTUI (addr string) {
 }
 
 func loadTopics(app *tview.Application, c *Client, list *tview.List) {
-	go func () {
+	go func() {
 		res, err := c.tail.ListTopics(c.ctx(), &emptypb.Empty{})
 		if err != nil {
 			app.Stop()
@@ -231,8 +234,8 @@ func loadTopics(app *tview.Application, c *Client, list *tview.List) {
 	}()
 }
 
-func loadMessages(app *tview.Application, c *Client, list *tview.List, topicID int64) {
-	go func () {
+func loadMessages(app *tview.Application, root tview.Primitive, c *Client, list *tview.List, topicID int64) {
+	go func() {
 		if c == nil {
 			return // race race race race !!!!!
 		}
@@ -260,7 +263,7 @@ func loadMessages(app *tview.Application, c *Client, list *tview.List, topicID i
 			for _, m := range res.Messages {
 				msg := m
 				username := users[msg.UserId]
-				filler := ""	
+				filler := ""
 				for i := 0; i < maxuserlen-len(username); i++ {
 					filler = filler + " "
 				}
@@ -282,27 +285,59 @@ func loadMessages(app *tview.Application, c *Client, list *tview.List, topicID i
 						app.Stop()
 						return
 					}
-					loadMessages(app, c, list, topicID)
+					loadMessages(app, root, c, list, topicID)
 				})
 			}
 			list.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 				switch event.Key() {
-					case tcell.KeyDelete:
-						index := list.GetCurrentItem()
-						_, secondary := list.GetItemText(index)
-						parts := strings.SplitN(secondary, " ", 2)
-						msgid, _ := strconv.ParseInt(parts[0], 10, 64)
-						userid, _ := strconv.ParseInt(parts[1], 10, 64)
-						if c.userid != userid {
-							return nil
-						}
-						c.DeleteMessage(msgid)
-						loadMessages(app, c, list, topicID)
+				case tcell.KeyDelete:
+					index := list.GetCurrentItem()
+					_, secondary := list.GetItemText(index)
+					parts := strings.SplitN(secondary, " ", 2)
+					msgid, _ := strconv.ParseInt(parts[0], 10, 64)
+					userid, _ := strconv.ParseInt(parts[1], 10, 64)
+					if c.userid != userid {
 						return nil
+					}
+					c.DeleteMessage(msgid)
+					loadMessages(app, root, c, list, topicID)
+					return nil
+				case tcell.KeyCtrlE:
+					index := list.GetCurrentItem()
+					main, secondary := list.GetItemText(index)
+
+					parts := strings.SplitN(secondary, " ", 2)
+					msgid, _ := strconv.ParseInt(parts[0], 10, 64)
+					userid, _ := strconv.ParseInt(parts[1], 10, 64)
+
+					if c.userid != userid {
+						return nil
+					}
+
+					// Extract original message text from the rendered label
+					// format: "... ❤️ <likes> | <text>"
+					split := strings.SplitN(main, " | ", 2)
+					if len(split) != 2 {
+						return nil
+					}
+					originalText := split[1]
+
+					showEditMessageModal(
+						app,
+						c,
+						root, // previous root
+						list,
+						topicID,
+						msgid,
+						originalText,
+					)
+
+					return nil
+
 				}
 				return event
 			})
-			list.SetCurrentItem(list.GetItemCount()-1)
+			list.SetCurrentItem(list.GetItemCount() - 1)
 			list.SetBorder(true).SetTitle(fmt.Sprintf("%d Messages. Ctrl-L: Select, Enter: Like, Del: Delete", len(res.Messages)))
 		})
 	}()
@@ -340,6 +375,43 @@ func showAddTopicModal(
 	modal := tview.NewFlex().
 		AddItem(nil, 0, 1, false).
 		AddItem(form, 40, 1, true).
+		AddItem(nil, 0, 1, false)
+
+	app.SetRoot(modal, true).SetFocus(form)
+}
+
+func showEditMessageModal(
+	app *tview.Application,
+	c *Client,
+	previousRoot tview.Primitive,
+	list *tview.List,
+	topicID int64,
+	messageID int64,
+	originalText string,
+) {
+	form := tview.NewForm()
+
+	form.
+		AddInputField("Edit message", originalText, 0, nil, nil).
+		AddButton("Save", func() {
+			text := form.GetFormItem(0).(*tview.InputField).GetText()
+			if text != "" {
+				c.UpdateMessage(topicID, messageID, text)
+			}
+			app.SetRoot(previousRoot, true)
+			app.SetFocus(list)
+			loadMessages(app, previousRoot, c, list, topicID)
+		}).
+		AddButton("Cancel", func() {
+			app.SetRoot(previousRoot, true)
+			app.SetFocus(list)
+		})
+
+	form.SetBorder(true).SetTitle("Edit message (Ctrl-E)")
+
+	modal := tview.NewFlex().
+		AddItem(nil, 0, 1, false).
+		AddItem(form, 80, 1, true).
 		AddItem(nil, 0, 1, false)
 
 	app.SetRoot(modal, true).SetFocus(form)

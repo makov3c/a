@@ -10,15 +10,14 @@ import (
 	"log"
 	"net"
 	"os"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"log"
-	"slices"
-	"reflect"
 	"time"
+
 	pb "4a.si/razpravljalnica/grpc/protobufRazpravljalnica"
 
 	"gorm.io/driver/sqlite"
@@ -84,13 +83,13 @@ type server struct {
 	db *gorm.DB
 	// lastUserID   int64
 	// mu_userCount sync.Mutex
-	masters []string // masters servers URLs. if len(s.masters) == 0, i am head node. updated on every FetchFrom.
-	slaves []string // slaves servers URLs, just subscribers
-	controlplane string // control plane URL, "" for single server setup
-	cpc *ControlPlaneClient
-	cpc_lock sync.RWMutex
-	s2s_psk string
-	naročniki map[chan pb.MessageEvent]pb.SubscribeTopicRequest
+	masters        []string // masters servers URLs. if len(s.masters) == 0, i am head node. updated on every FetchFrom.
+	slaves         []string // slaves servers URLs, just subscribers
+	controlplane   string   // control plane URL, "" for single server setup
+	cpc            *ControlPlaneClient
+	cpc_lock       sync.RWMutex
+	s2s_psk        string
+	naročniki      map[chan pb.MessageEvent]pb.SubscribeTopicRequest
 	naročniki_lock sync.RWMutex
 	event_št       atomic.Int64
 	url            string // own url
@@ -133,7 +132,7 @@ func Server(url string, controlplane string, s2s_psk string, myurl string, dbfil
 	var wg sync.WaitGroup
 	wg.Add(1)
 	s.cpc_lock.Lock()
-	go func () {
+	go func() {
 		if err := grpcServer.Serve(listener); err != nil {
 			panic(err)
 		}
@@ -177,9 +176,9 @@ func Server(url string, controlplane string, s2s_psk string, myurl string, dbfil
 					log.Printf("Controlplane does not use RAFT. Controlplane failure has undefined consequences for the behaviour of this strežnik.")
 					goto NORAFT
 				}
-		//		NOT DELETING, SAME AS WE DON'T DELETE VOTERS I GUESS IDK IDK
-		//		log.Printf("Deleting controlplane %v due to error: %v", cpurl, err)
-		//		delete(controlplanes, cpurl)
+				//		NOT DELETING, SAME AS WE DON'T DELETE VOTERS I GUESS IDK IDK
+				//		log.Printf("Deleting controlplane %v due to error: %v", cpurl, err)
+				//		delete(controlplanes, cpurl)
 				if len(controlplanes) == 0 {
 					panic("lost connection to all controlplanes")
 				}
@@ -219,7 +218,7 @@ func Server(url string, controlplane string, s2s_psk string, myurl string, dbfil
 		s.cpc = cpc
 		s.cpc_lock.Unlock()
 	}
-	NORAFT:
+NORAFT:
 	wg.Wait()
 }
 func (s *server) FetchFrom(ctx context.Context, req *pb.FetchFromRequest) (*emptypb.Empty, error) {
@@ -319,10 +318,10 @@ func (s *server) s2sctx() context.Context {
 	md.Set("authorization", s.s2s_psk)
 	return metadata.NewOutgoingContext(context.Background(), md)
 }
-func (s *server) handle_notify_err (err error, slave string) {
+func (s *server) handle_notify_err(err error, slave string) {
 	// FIXME notify control plane
 }
-func (s *server) NotifySlavesUser (user *pb.User)  {
+func (s *server) NotifySlavesUser(user *pb.User) {
 	for _, slave := range s.slaves {
 		client, err := NewClient(slave)
 		if err != nil {
@@ -520,8 +519,8 @@ func parseJWT(tokenStr string) (int64, error) {
 
 	return claims.UserID, nil
 }
-func logInterceptor (s *server) grpc.UnaryServerInterceptor {
-	return func (ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+func logInterceptor(s *server) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		log.Printf("logInterceptor request %v %v", info, req)
 		res, err := handler(ctx, req)
 		log.Printf("logInterceptor response %v %v", res, err)
@@ -927,7 +926,7 @@ func (s *server) GetLikes(ctx context.Context, req *emptypb.Empty) (*pb.GetLikes
 	allLikes := make([]*pb.LikeMessageRequest, 0, len(likes))
 	for _, l := range likes {
 		allLikes = append(allLikes, &pb.LikeMessageRequest{
-			TopicId: -1, // FIXME get topicid for message
+			TopicId:   -1, // FIXME get topicid for message
 			MessageId: l.MessageID,
 			UserId:    l.UserID,
 		})
