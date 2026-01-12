@@ -1,18 +1,17 @@
 package main
-
 import (
 	"context"
 	"fmt"
 	"log"
-
+	"time"
 	pb "4a.si/razpravljalnica/grpc/protobufRazpravljalnica"
-
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/status"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
-
 type ControlPlaneClient struct {
 	conn *grpc.ClientConn
 	api pb.ControlPlaneClient
@@ -26,7 +25,7 @@ func NewControlPlaneClient (addr string, s2s_psk string) (*ControlPlaneClient, e
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("newcontrolplaneclient called with ", addr, " ", s2s_psk, "\n")
+	// log.Printf("newcontrolplaneclient called with ", addr, " ", s2s_psk, "\n")
 	return &ControlPlaneClient{
 		conn: conn,
 		api:  pb.NewControlPlaneClient(conn),
@@ -64,7 +63,22 @@ func (c *ControlPlaneClient) ServerAvailable (url string) error {
 	}
 	return nil
 }
-
+func (c *ControlPlaneClient) GetRaftLeader (deadline time.Time) (*pb.ControlPlaneInfo, error) { // deadline je recimo time.Now().Add(time.Second())
+	RETRY:
+	ctx, _ := context.WithDeadline(c.ctx(), deadline)
+	res, err := c.api.GetRaftLeader(ctx, &emptypb.Empty{})
+	if err != nil {
+		if deadline.Sub(time.Now()).Seconds() > 0 {
+			return nil, err
+		}
+		st, ok := status.FromError(err)
+		if ok && st.Code() == codes.Unavailable {
+			goto RETRY // meh loh bi dal kkšn dilej sam eh sej mamo network latency za delay FIXME
+		}
+		return nil, err
+	}
+	return res, nil
+}
 // Client wraps gRPC connection and JWT
 type Client struct {
 	conn  *grpc.ClientConn
@@ -75,16 +89,16 @@ type Client struct {
 	cpurl string
 	cpc *ControlPlaneClient
 	userid int64
+	cplanes []string // filled by NewClientCP, use in future calls to NewClientCP
 }
 
 func ClientMain(url string, uName string) {
-	a, err := NewClientCP(url)
+	a, err := NewClientCP([]string{url})
 	if err != nil {
 		panic(err)
 	}
 	defer a.Close()
-
-	b, err := NewClientCP(url)
+	b, err := NewClientCP([]string{url})
 	if err != nil {
 		panic(err)
 	}
@@ -92,28 +106,26 @@ func ClientMain(url string, uName string) {
 
 	aID, err := a.CreateUser("anton")
 	if err != nil {
-		log.Fatal("CreateUser: %v", err)
+		panic(err)
 	}
 	bID, err := b.CreateUser("Barbara")
 	if err != nil {
-		log.Fatal("CreateUser: %v", err)
+		panic(err)
 	}
-
 	a.Login(aID)
 	b.Login(bID)
-
-	topicID := a.CreateTopic("chatting")
+	topicID, _ := a.CreateTopic("chatting")
 
 	fmt.Println("\n--- Posting messages ---")
-	aMsgID := a.PostMessage(topicID, "i love this")
-	bMsgID := b.PostMessage(topicID, "me too")
+	aMsgID, _ := a.PostMessage(topicID, "i love this")
+	bMsgID, _ := b.PostMessage(topicID, "me too")
 
 	b.PostMessage(topicID, "doing PS hw")
 	b.PostMessage(topicID, "during matlab exercises")
 	b.PostMessage(topicID, "writing code")
 	a.PostMessage(topicID, "all alone")
 	a.PostMessage(topicID, "and also writing silly messages")
-	bMsgID2 := b.PostMessage(topicID, "so i can test")
+	bMsgID2, _ := b.PostMessage(topicID, "so i can test")
 	b.PostMessage(topicID, "if function")
 	b.PostMessage(topicID, "get messages something something")
 	b.PostMessage(topicID, "actually works")
@@ -144,7 +156,7 @@ func ClientMain(url string, uName string) {
 
 	a.GetUsers()
 
-	c, err := NewClientCP(url)
+	c, err := NewClientCP([]string{url})
 	if err != nil {
 		panic(err)
 	}
@@ -152,20 +164,45 @@ func ClientMain(url string, uName string) {
 
 	cID, err := c.CreateUser("Cecilija")
 	if err != nil {
-		log.Fatal("CreateUser: %v", err)
+		panic(err)
 	}
 	c.Login(cID)
 
 	c.GetUsers()
 
 	b.GetMessages(topicID, 0, 10)
-	fmt.Println("\n --- \n")
+	fmt.Println("\n --- ")
 	b.GetMessages(topicID, bMsgID2, 4)
 }
-func NewClientCP(addr string) (*Client, error) {
-	cpc, err := NewControlPlaneClient(addr, "odjemalec")
+func NewClientCP(addrs []string) (*Client, error) {
+	var cpc *ControlPlaneClient
+	var err error
+	for _, addr := range addrs {
+		cpc, err = NewControlPlaneClient(addr, "odjemalec")
+		if err == nil {
+			break
+		}
+	}
 	if err != nil {
 		return nil, err
+	}
+	resx, err := cpc.GetRaftLeader(time.Now().Add(time.Second))
+	if err != nil {
+		return nil, err
+	}
+	cpc.Close()
+	leaderurl := resx.ControlplaneAddress
+	cpc, err = NewControlPlaneClient(leaderurl, "odjemalec")
+	if err != nil {
+		return nil, err
+	}
+	res, err := cpc.api.GetControlPlanes(cpc.ctx(), &emptypb.Empty{})
+	if err != nil {
+		return nil, err
+	}
+	cplanes := []string{}
+	for _, cpinfo := range res.ControlPlanes {
+		cplanes = append(cplanes, cpinfo.ControlplaneAddress)
 	}
 	head, tail, err := cpc.GetClusterState()
 	if err != nil {
@@ -191,7 +228,8 @@ func NewClientCP(addr string) (*Client, error) {
 		api:  pb.NewMessageBoardClient(headconn),
 		tail:  pb.NewMessageBoardClient(tailconn),
 		cpc: cpc,
-		cpurl: addr,
+		cpurl: leaderurl,
+		cplanes: cplanes,
 	}
 	return c, nil
 }
@@ -227,8 +265,8 @@ func (c *Client) CreateUser(name string) (int64, error) {
 	}
 	return res.Id, nil
 }
-func (c *Client) Login(userID int64) error {
-	res, err := c.api.Login(context.Background(), &pb.LoginRequest{UserId: userID})
+func (c *Client) Login (userID int64) error {
+	res, err := c.api.Login (context.Background(), &pb.LoginRequest{UserId: userID})
 	if err != nil {
 		return err
 	}
@@ -237,12 +275,12 @@ func (c *Client) Login(userID int64) error {
 	return nil
 }
 
-func (c *Client) CreateTopic(name string) int64 {
+func (c *Client) CreateTopic(name string) (int64, error) {
 	res, err := c.api.CreateTopic(c.ctx(), &pb.CreateTopicRequest{Name: name})
 	if err != nil {
-		log.Fatal(err)
+		return 0, err
 	}
-	return res.Id
+	return res.Id, nil
 }
 
 func (c *Client) AddUser(user *pb.User) error {
@@ -261,16 +299,17 @@ func (c *Client) AddLike(like *pb.LikeMessageRequest) error {
 	_, err := c.api.AddLike(c.ctx(), like)
 	return err
 }
-func (c *Client) PostMessage(topicID int64, text string) int64 {
-	res, err := c.api.PostMessage(c.ctx(), &pb.PostMessageRequest{
+func (c *Client) PostMessage (topicID int64, text string) (int64, error) {
+	ctx, _ := context.WithDeadline(c.ctx(), time.Now().Add(time.Second))
+	res, err := c.api.PostMessage(ctx, &pb.PostMessageRequest{
 		TopicId: topicID,
 		Text:    text,
 	})
 	if err != nil {
-		log.Fatal(err)
+		return 0, err
 	}
 	// fmt.Println("Posted message:", res)
-	return res.Id
+	return res.Id, nil
 }
 
 func (c *Client) LikeMessage(topicID, messageID int64) error {
@@ -284,26 +323,27 @@ func (c *Client) LikeMessage(topicID, messageID int64) error {
 	return nil
 }
 
-func (c *Client) UpdateMessage(topicID, messageID int64, text string) {
-	res, err := c.api.UpdateMessage(c.ctx(), &pb.UpdateMessageRequest{
+func (c *Client) UpdateMessage(topicID, messageID int64, text string) error {
+	_, err := c.api.UpdateMessage(c.ctx(), &pb.UpdateMessageRequest{
 		TopicId:   topicID,
 		MessageId: messageID,
 		Text:      text,
 	})
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
-	fmt.Println("Updated message:", res)
+	return nil
 }
 
-func (c *Client) DeleteMessage(messageID int64) {
+func (c *Client) DeleteMessage (messageID int64) error {
 	_, err := c.api.DeleteMessage(c.ctx(), &pb.DeleteMessageRequest{
 		UserId: c.userid,
 		MessageId: messageID,
 	})
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
+	return nil
 }
 
 func (c *Client) GetSubscriptionNode(topicIDs []int64) (*pb.SubscriptionNodeResponse, error) {
@@ -323,7 +363,7 @@ func (c *Client) GetSubscriptionNode(topicIDs []int64) (*pb.SubscriptionNodeResp
 	return res, nil
 }
 
-func (c *Client) ListTopics() {
+func (c *Client) ListTopics () {
 
 	res, err := c.tail.ListTopics(c.ctx(), &emptypb.Empty{})
 	if err != nil {
@@ -337,7 +377,7 @@ func (c *Client) ListTopics() {
 func (c *Client) GetUsers() (map[int64]string, error) {
 	res, err := c.tail.GetUsers(c.ctx(), &emptypb.Empty{})
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 	r := make(map[int64]string)
 	for _, u := range res.Users {
@@ -347,7 +387,7 @@ func (c *Client) GetUsers() (map[int64]string, error) {
 	return r, nil
 }
 
-func (c *Client) GetMessages(topicID int64, fromMessageID int64, limit int32) {
+func (c *Client) GetMessages (topicID int64, fromMessageID int64, limit int32) {
 
 	res, err := c.tail.GetMessages(c.ctx(), &pb.GetMessagesRequest{
 		TopicId:       topicID,

@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"log"
 	"slices"
+	"reflect"
 	pb "4a.si/razpravljalnica/grpc/protobufRazpravljalnica"
 
 	"gorm.io/driver/sqlite"
@@ -70,7 +71,7 @@ type Message struct {
 
 type MessageLike struct {
 	MessageID int64 `gorm:"primaryKey"`
-	UserID    int64 `gorm:"primeryKey"`
+	UserID    int64 `gorm:"primaryKey"`
 
 	// _ struct{} `gorm:"uniqueIndex:idx_message_user"` // (user can like a message only once)
 }
@@ -85,6 +86,7 @@ type server struct {
 	slaves []string // slaves servers URLs, just subscribers
 	controlplane string // control plane URL, "" for single server setup
 	cpc *ControlPlaneClient
+	cpc_lock sync.RWMutex
 	s2s_psk string
 	naročniki map[chan pb.MessageEvent]pb.SubscribeTopicRequest
 	naročniki_lock sync.RWMutex
@@ -128,28 +130,94 @@ func Server(url string, controlplane string, s2s_psk string, myurl string, dbfil
 	fmt.Printf("gRPC server listening at hostname %v, url %v\n", hostName, url)
 	var wg sync.WaitGroup
 	wg.Add(1)
+	s.cpc_lock.Lock()
 	go func () {
 		if err := grpcServer.Serve(listener); err != nil {
 			panic(err)
 		}
 		wg.Done()
 	}()
-	s.cpc = nil
-	var cpc *ControlPlaneClient
+	controlplanes := make(map[string]struct{})
 	if controlplane != "" {
+		controlplanes[controlplane] = struct{}{}
+	}
+	s.cpc = nil
+	s.cpc_lock.Unlock()
+	for {
+		time.Sleep(time.Second) // TODO: do this in a loop, check cpc leader, call serveravailable every second (for raft)
+		log.Printf("controlplanes: %v", controlplanes)
+		if len(controlplanes) == 0 {
+			log.Printf("no controlplanes, exiting loop")
+			break
+		}
 		if s2s_psk == "" {
 			log.Fatal("s2s_psk ne sme biti prazen niz")
 		}
-		cpc, err := NewControlPlaneClient(controlplane, s2s_psk)
-		if err != nil {
-			panic(err)
+		var cpc *ControlPlaneClient
+		cpc = nil
+		for cpurl, _ := range controlplanes {
+			var err error
+			cpc, err = NewControlPlaneClient(cpurl, s2s_psk)
+			if err != nil {
+				panic(err)
+			}
+			res, err := cpc.GetRaftLeader(time.Now().Add(time.Second))
+			if err != nil {
+				st, ok := status.FromError(err)
+				if ok && st.Code() == codes.FailedPrecondition {
+					err = cpc.ServerAvailable(myurl)
+					if err != nil {
+						panic(err)
+					}
+					s.cpc_lock.Lock()
+					s.cpc = cpc
+					s.cpc_lock.Unlock()
+					log.Printf("Controlplane does not use RAFT. Controlplane failure has undefined consequences for the behaviour of this strežnik.")
+					goto NORAFT
+				}
+		//		NOT DELETING, SAME AS WE DON'T DELETE VOTERS I GUESS IDK IDK
+		//		log.Printf("Deleting controlplane %v due to error: %v", cpurl, err)
+		//		delete(controlplanes, cpurl)
+				if len(controlplanes) == 0 {
+					panic("lost connection to all controlplanes")
+				}
+				continue
+			}
+			log.Printf("healthcheck: obtainer raft leader: %v", res)
+			cpc.Close()
+			cpc, err = NewControlPlaneClient(res.ControlplaneAddress, s2s_psk)
+			if err != nil {
+				panic(err)
+			}
+			ctx, _ := context.WithDeadline(cpc.ctx(), time.Now().Add(time.Second))
+			cps, err := cpc.api.GetControlPlanes(ctx, &emptypb.Empty{})
+			if err != nil {
+				log.Printf("SPORNO, kao leader ne more odgovoriti na getcontrolplanes: %v", err)
+				cpc.Close()
+				continue
+			}
+			for _, cpu := range cps.ControlPlanes {
+				controlplanes[cpu.ControlplaneAddress] = struct{}{}
+			}
+			err = cpc.ServerAvailable(myurl)
+			if err != nil {
+				log.Printf("SPORNO, kao leader ne more odgovoriti na ServerAvailable: %v", err)
+				cpc.Close()
+				continue
+			}
+			break
 		}
-		err = cpc.ServerAvailable(myurl)
-		if err != nil {
-			panic(err)
+		if cpc == nil {
+			log.Fatal("failed to establish connection to cpc") // this could be fixed in theory FIXME
 		}
+		s.cpc_lock.Lock()
+		if s.cpc != nil {
+			s.cpc.Close()
+		}
+		s.cpc = cpc
+		s.cpc_lock.Unlock()
 	}
-	s.cpc = cpc // !!! connection leak !!!! nikoli ne pokličemo cpc.Close!
+	NORAFT:
 	wg.Wait()
 }
 func (s *server) FetchFrom (ctx context.Context, req *pb.FetchFromRequest) (*emptypb.Empty, error) {
@@ -163,13 +231,16 @@ func (s *server) FetchFrom (ctx context.Context, req *pb.FetchFromRequest) (*emp
 		return nil, status.Error(codes.Unauthenticated, "wrong s2s authentication")
 	}
 	log.Printf("FetchFrom handler: auth successful")
+	if reflect.DeepEqual(s.masters, req.Masters) {
+		return &emptypb.Empty{}, nil // noop, ne spreminja se master
+	}
 	for _, masterurl := range req.Masters {
 		c, err := NewClient(masterurl)
 		if err != nil {
 			return nil, err
 		}
 		c.token = s.s2s_psk
-		log.Printf("FetchFrom: created a client for ", masterurl)
+		log.Printf("FetchFrom: created a client for %v", masterurl)
 		defer c.Close()
 		{
 			res, err := c.api.GetUsers(c.ctx(), &emptypb.Empty{})
@@ -247,17 +318,18 @@ func (s *server) s2sctx() context.Context {
 	return metadata.NewOutgoingContext(context.Background(), md)
 }
 func (s *server) handle_notify_err (err error, slave string) {
-	// TODO notify control plane
+	// FIXME notify control plane
 }
-func (s *server) NotifySlavesUser (user *pb.User) {
+func (s *server) NotifySlavesUser (user *pb.User)  {
 	for _, slave := range s.slaves {
 		client, err := NewClient(slave)
 		if err != nil {
 			s.handle_notify_err(err, slave)
+			continue
 		}
-		defer client.Close()
 		client.token = s.s2s_psk
 		err = client.AddUser(user)
+		client.Close()
 		if err != nil {
 			s.handle_notify_err(err, slave)
 		}
@@ -268,10 +340,11 @@ func (s *server) NotifySlavesMessage (message *pb.Message) {
 		client, err := NewClient(slave)
 		if err != nil {
 			s.handle_notify_err(err, slave)
+			continue
 		}
-		defer client.Close()
 		client.token = s.s2s_psk
 		err = client.AddMessage(message)
+		client.Close()
 		if err != nil {
 			s.handle_notify_err(err, slave)
 		}
@@ -288,10 +361,11 @@ func (s *server) NotifySlavesTopic (topic *pb.Topic) {
 		client, err := NewClient(slave)
 		if err != nil {
 			s.handle_notify_err(err, slave)
+			continue
 		}
-		defer client.Close()
 		client.token = s.s2s_psk
 		err = client.AddTopic(topic)
+		client.Close()
 		if err != nil {
 			s.handle_notify_err(err, slave)
 		}
@@ -302,10 +376,11 @@ func (s *server) NotifySlavesLike (like *pb.LikeMessageRequest) {
 		client, err := NewClient(slave)
 		if err != nil {
 			s.handle_notify_err(err, slave)
+			continue
 		}
-		defer client.Close()
 		client.token = s.s2s_psk
 		err = client.AddLike(like)
+		client.Close()
 		if err != nil {
 			s.handle_notify_err(err, slave)
 		}
@@ -377,7 +452,7 @@ func (s *server) AddTopic(ctx context.Context, req *pb.Topic) (*emptypb.Empty, e
 }
 func (s *server) CreateUser(ctx context.Context, req *pb.CreateUserRequest) (*pb.User, error) {
 	if len(s.masters) != 0 {
-		return nil, status.Error(codes.Internal, "write zahteva poslala na ne-head node v verigi")
+		return nil, status.Error(codes.Internal, "write zahteva poslana na ne-head node v verigi")
 	}
 	user := &User{Name: req.Name}
 	// WithContext - if client cancels the request the db operation is canceled too
@@ -445,9 +520,9 @@ func parseJWT(tokenStr string) (int64, error) {
 }
 func logInterceptor (s *server) grpc.UnaryServerInterceptor {
 	return func (ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		// log.Printf("logInterceptor request", info, req)
+		log.Printf("logInterceptor request %v %v", info, req)
 		res, err := handler(ctx, req)
-		// log.Printf("logInterceptor response", res, err)
+		log.Printf("logInterceptor response %v %v", res, err)
 		return res, err
 	}
 }
@@ -659,10 +734,11 @@ func (s *server) DeleteMessage(ctx context.Context, req *pb.DeleteMessageRequest
 		client, err := NewClient(slave)
 		if err != nil {
 			s.handle_notify_err(err, slave)
+			continue
 		}
-		defer client.Close()
 		client.token = s.s2s_psk
-		client.DeleteMessage(req.MessageId)
+		err = client.DeleteMessage(req.MessageId)
+		client.Close()
 		if err != nil {
 			s.handle_notify_err(err, slave)
 		}
@@ -753,10 +829,14 @@ func generateSubscriptionToken(userID int64, topicIDs []int64) (string, error) {
 	return token.SignedString(jwtSecret)
 }
 func (s *server) chooseSubscriptionNode(userID int64, topicIDs []int64) (*pb.NodeInfo, error) {
+	s.cpc_lock.RLock()
 	if s.cpc == nil {
+		defer s.cpc_lock.RUnlock()
 		return &pb.NodeInfo{NodeId: s.url, Address: s.url}, nil
 	}
-	res, err := s.cpc.api.GetRandomNode(s.cpc.ctx(), &emptypb.Empty{})
+	ctx, _ := context.WithDeadline(s.cpc.ctx(), time.Now().Add(time.Second))
+	res, err := s.cpc.api.GetRandomNode(ctx, &emptypb.Empty{}) // FIXME s.cpc je lockan med network requestom!!!
+	s.cpc_lock.RUnlock()
 	if err != nil {
 		return nil, err
 	}
@@ -845,7 +925,7 @@ func (s *server) GetLikes(ctx context.Context, req *emptypb.Empty) (*pb.GetLikes
 	allLikes := make([]*pb.LikeMessageRequest, 0, len(likes))
 	for _, l := range likes {
 		allLikes = append(allLikes, &pb.LikeMessageRequest{
-			TopicId: -1, // TODO get topicid for message
+			TopicId: -1, // FIXME get topicid for message
 			MessageId: l.MessageID,
 			UserId: l.UserID,
 		})

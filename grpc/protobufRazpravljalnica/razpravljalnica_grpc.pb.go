@@ -878,10 +878,14 @@ var MessageBoard_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	ControlPlane_GetClusterState_FullMethodName   = "/razpravljalnica.ControlPlane/GetClusterState"
-	ControlPlane_ReportNotifyError_FullMethodName = "/razpravljalnica.ControlPlane/ReportNotifyError"
-	ControlPlane_ServerAvailable_FullMethodName   = "/razpravljalnica.ControlPlane/ServerAvailable"
-	ControlPlane_GetRandomNode_FullMethodName     = "/razpravljalnica.ControlPlane/GetRandomNode"
+	ControlPlane_GetClusterState_FullMethodName       = "/razpravljalnica.ControlPlane/GetClusterState"
+	ControlPlane_ReportNotifyError_FullMethodName     = "/razpravljalnica.ControlPlane/ReportNotifyError"
+	ControlPlane_ServerAvailable_FullMethodName       = "/razpravljalnica.ControlPlane/ServerAvailable"
+	ControlPlane_GetRandomNode_FullMethodName         = "/razpravljalnica.ControlPlane/GetRandomNode"
+	ControlPlane_GetControlPlanes_FullMethodName      = "/razpravljalnica.ControlPlane/GetControlPlanes"
+	ControlPlane_GetRaftLeader_FullMethodName         = "/razpravljalnica.ControlPlane/GetRaftLeader"
+	ControlPlane_ControlPlaneAvailable_FullMethodName = "/razpravljalnica.ControlPlane/ControlPlaneAvailable"
+	ControlPlane_Ping_FullMethodName                  = "/razpravljalnica.ControlPlane/Ping"
 )
 
 // ControlPlaneClient is the client API for ControlPlane service.
@@ -895,6 +899,11 @@ type ControlPlaneClient interface {
 	ReportNotifyError(ctx context.Context, in *NotifyErrorReport, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	ServerAvailable(ctx context.Context, in *NodeInfo, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	GetRandomNode(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*NodeInfo, error)
+	// raft
+	GetControlPlanes(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ControlPlanes, error)
+	GetRaftLeader(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ControlPlaneInfo, error)
+	ControlPlaneAvailable(ctx context.Context, in *ControlPlaneInfo, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	Ping(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error)
 }
 
 type controlPlaneClient struct {
@@ -945,6 +954,46 @@ func (c *controlPlaneClient) GetRandomNode(ctx context.Context, in *emptypb.Empt
 	return out, nil
 }
 
+func (c *controlPlaneClient) GetControlPlanes(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ControlPlanes, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ControlPlanes)
+	err := c.cc.Invoke(ctx, ControlPlane_GetControlPlanes_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlPlaneClient) GetRaftLeader(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ControlPlaneInfo, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ControlPlaneInfo)
+	err := c.cc.Invoke(ctx, ControlPlane_GetRaftLeader_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlPlaneClient) ControlPlaneAvailable(ctx context.Context, in *ControlPlaneInfo, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, ControlPlane_ControlPlaneAvailable_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlPlaneClient) Ping(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, ControlPlane_Ping_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ControlPlaneServer is the server API for ControlPlane service.
 // All implementations must embed UnimplementedControlPlaneServer
 // for forward compatibility.
@@ -956,6 +1005,11 @@ type ControlPlaneServer interface {
 	ReportNotifyError(context.Context, *NotifyErrorReport) (*emptypb.Empty, error)
 	ServerAvailable(context.Context, *NodeInfo) (*emptypb.Empty, error)
 	GetRandomNode(context.Context, *emptypb.Empty) (*NodeInfo, error)
+	// raft
+	GetControlPlanes(context.Context, *emptypb.Empty) (*ControlPlanes, error)
+	GetRaftLeader(context.Context, *emptypb.Empty) (*ControlPlaneInfo, error)
+	ControlPlaneAvailable(context.Context, *ControlPlaneInfo) (*emptypb.Empty, error)
+	Ping(context.Context, *emptypb.Empty) (*emptypb.Empty, error)
 	mustEmbedUnimplementedControlPlaneServer()
 }
 
@@ -977,6 +1031,18 @@ func (UnimplementedControlPlaneServer) ServerAvailable(context.Context, *NodeInf
 }
 func (UnimplementedControlPlaneServer) GetRandomNode(context.Context, *emptypb.Empty) (*NodeInfo, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetRandomNode not implemented")
+}
+func (UnimplementedControlPlaneServer) GetControlPlanes(context.Context, *emptypb.Empty) (*ControlPlanes, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetControlPlanes not implemented")
+}
+func (UnimplementedControlPlaneServer) GetRaftLeader(context.Context, *emptypb.Empty) (*ControlPlaneInfo, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetRaftLeader not implemented")
+}
+func (UnimplementedControlPlaneServer) ControlPlaneAvailable(context.Context, *ControlPlaneInfo) (*emptypb.Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method ControlPlaneAvailable not implemented")
+}
+func (UnimplementedControlPlaneServer) Ping(context.Context, *emptypb.Empty) (*emptypb.Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method Ping not implemented")
 }
 func (UnimplementedControlPlaneServer) mustEmbedUnimplementedControlPlaneServer() {}
 func (UnimplementedControlPlaneServer) testEmbeddedByValue()                      {}
@@ -1071,6 +1137,78 @@ func _ControlPlane_GetRandomNode_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ControlPlane_GetControlPlanes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlPlaneServer).GetControlPlanes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlPlane_GetControlPlanes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlPlaneServer).GetControlPlanes(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ControlPlane_GetRaftLeader_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlPlaneServer).GetRaftLeader(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlPlane_GetRaftLeader_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlPlaneServer).GetRaftLeader(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ControlPlane_ControlPlaneAvailable_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ControlPlaneInfo)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlPlaneServer).ControlPlaneAvailable(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlPlane_ControlPlaneAvailable_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlPlaneServer).ControlPlaneAvailable(ctx, req.(*ControlPlaneInfo))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ControlPlane_Ping_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlPlaneServer).Ping(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlPlane_Ping_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlPlaneServer).Ping(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ControlPlane_ServiceDesc is the grpc.ServiceDesc for ControlPlane service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1093,6 +1231,22 @@ var ControlPlane_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetRandomNode",
 			Handler:    _ControlPlane_GetRandomNode_Handler,
+		},
+		{
+			MethodName: "GetControlPlanes",
+			Handler:    _ControlPlane_GetControlPlanes_Handler,
+		},
+		{
+			MethodName: "GetRaftLeader",
+			Handler:    _ControlPlane_GetRaftLeader_Handler,
+		},
+		{
+			MethodName: "ControlPlaneAvailable",
+			Handler:    _ControlPlane_ControlPlaneAvailable_Handler,
+		},
+		{
+			MethodName: "Ping",
+			Handler:    _ControlPlane_Ping_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

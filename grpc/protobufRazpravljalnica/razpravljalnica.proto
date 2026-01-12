@@ -209,12 +209,22 @@ service ControlPlane {
   rpc ReportNotifyError (NotifyErrorReport) returns (google.protobuf.Empty);
   rpc ServerAvailable (NodeInfo) returns (google.protobuf.Empty);
   rpc GetRandomNode (google.protobuf.Empty) returns (NodeInfo); // IN CHAIN!
+  // raft
+  rpc GetControlPlanes (google.protobuf.Empty) returns (ControlPlanes);
+  rpc GetRaftLeader (google.protobuf.Empty) returns (ControlPlaneInfo);
+  rpc ControlPlaneAvailable (ControlPlaneInfo) returns (google.protobuf.Empty);
+  rpc Ping(google.protobuf.Empty) returns (google.protobuf.Empty);
 }
-
+message ControlPlaneInfo {
+  string raft_address = 1;
+  string controlplane_address = 2;
+}
+message ControlPlanes {
+        repeated ControlPlaneInfo ControlPlanes = 1;
+}
 message NotifyErrorReport {
         string slave = 1;
 }
-
 message GetClusterStateResponse {
   NodeInfo head = 1;
   NodeInfo tail = 2;
