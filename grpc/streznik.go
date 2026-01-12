@@ -7,15 +7,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
-	"time"
 	"sync"
 	"sync/atomic"
-	"log"
-	"slices"
+	"time"
+
 	pb "4a.si/razpravljalnica/grpc/protobufRazpravljalnica"
 
 	"gorm.io/driver/sqlite"
@@ -70,7 +71,7 @@ type Message struct {
 
 type MessageLike struct {
 	MessageID int64 `gorm:"primaryKey"`
-	UserID    int64 `gorm:"primeryKey"`
+	UserID    int64 `gorm:"primaryKey"`
 
 	// _ struct{} `gorm:"uniqueIndex:idx_message_user"` // (user can like a message only once)
 }
@@ -81,15 +82,15 @@ type server struct {
 	db *gorm.DB
 	// lastUserID   int64
 	// mu_userCount sync.Mutex
-	masters []string // masters servers URLs. if len(s.masters) == 0, i am head node. updated on every FetchFrom.
-	slaves []string // slaves servers URLs, just subscribers
-	controlplane string // control plane URL, "" for single server setup
-	cpc *ControlPlaneClient
-	s2s_psk string
-	naročniki map[chan pb.MessageEvent]pb.SubscribeTopicRequest
+	masters        []string // masters servers URLs. if len(s.masters) == 0, i am head node. updated on every FetchFrom.
+	slaves         []string // slaves servers URLs, just subscribers
+	controlplane   string   // control plane URL, "" for single server setup
+	cpc            *ControlPlaneClient
+	s2s_psk        string
+	naročniki      map[chan pb.MessageEvent]pb.SubscribeTopicRequest
 	naročniki_lock sync.RWMutex
-	event_št atomic.Int64
-	url string // own url
+	event_št       atomic.Int64
+	url            string // own url
 }
 
 func Server(url string, controlplane string, s2s_psk string, myurl string, dbfile string) {
@@ -107,7 +108,7 @@ func Server(url string, controlplane string, s2s_psk string, myurl string, dbfil
 		panic("failed to migrate database")
 	}
 
-	s := &server{db: db, controlplane: controlplane, s2s_psk: s2s_psk, url:myurl, naročniki: make(map[chan pb.MessageEvent]pb.SubscribeTopicRequest)} // creates a new value of type server, assigns field db to the vasiable users_db (a *gorm DB)
+	s := &server{db: db, controlplane: controlplane, s2s_psk: s2s_psk, url: myurl, naročniki: make(map[chan pb.MessageEvent]pb.SubscribeTopicRequest)} // creates a new value of type server, assigns field db to the vasiable users_db (a *gorm DB)
 	// pripravimo strežnik gRPC
 	grpcServer := grpc.NewServer(
 		grpc.ChainUnaryInterceptor(logInterceptor(s), authInterceptor(s)),
@@ -128,7 +129,7 @@ func Server(url string, controlplane string, s2s_psk string, myurl string, dbfil
 	fmt.Printf("gRPC server listening at hostname %v, url %v\n", hostName, url)
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go func () {
+	go func() {
 		if err := grpcServer.Serve(listener); err != nil {
 			panic(err)
 		}
@@ -152,7 +153,7 @@ func Server(url string, controlplane string, s2s_psk string, myurl string, dbfil
 	s.cpc = cpc // !!! connection leak !!!! nikoli ne pokličemo cpc.Close!
 	wg.Wait()
 }
-func (s *server) FetchFrom (ctx context.Context, req *pb.FetchFromRequest) (*emptypb.Empty, error) {
+func (s *server) FetchFrom(ctx context.Context, req *pb.FetchFromRequest) (*emptypb.Empty, error) {
 	log.Printf("FetchFrom called")
 	userID, err := userIDFromContext(ctx)
 	if err != nil {
@@ -209,9 +210,9 @@ func (s *server) FetchFrom (ctx context.Context, req *pb.FetchFromRequest) (*emp
 		}
 		{
 			res, err := c.api.GetMessages(c.ctx(), &pb.GetMessagesRequest{
-				TopicId: -1,
+				TopicId:       -1,
 				FromMessageId: -1,
-				Limit: 99999999,
+				Limit:         99999999,
 			})
 			if err != nil {
 				return nil, err
@@ -227,7 +228,7 @@ func (s *server) FetchFrom (ctx context.Context, req *pb.FetchFromRequest) (*emp
 	s.masters = req.Masters
 	return &emptypb.Empty{}, nil
 }
-func (s *server) SetSlaves (ctx context.Context, req *pb.SetSlavesRequest) (*emptypb.Empty, error) {
+func (s *server) SetSlaves(ctx context.Context, req *pb.SetSlavesRequest) (*emptypb.Empty, error) {
 	log.Printf("SetSlaves called")
 	userID, err := userIDFromContext(ctx)
 	if err != nil {
@@ -246,10 +247,10 @@ func (s *server) s2sctx() context.Context {
 	md.Set("authorization", s.s2s_psk)
 	return metadata.NewOutgoingContext(context.Background(), md)
 }
-func (s *server) handle_notify_err (err error, slave string) {
+func (s *server) handle_notify_err(err error, slave string) {
 	// TODO notify control plane
 }
-func (s *server) NotifySlavesUser (user *pb.User) {
+func (s *server) NotifySlavesUser(user *pb.User) {
 	for _, slave := range s.slaves {
 		client, err := NewClient(slave)
 		if err != nil {
@@ -263,7 +264,7 @@ func (s *server) NotifySlavesUser (user *pb.User) {
 		}
 	}
 }
-func (s *server) NotifySlavesMessage (message *pb.Message) {
+func (s *server) NotifySlavesMessage(message *pb.Message) {
 	for _, slave := range s.slaves {
 		client, err := NewClient(slave)
 		if err != nil {
@@ -283,7 +284,7 @@ func (s *server) NotifySlavesMessage (message *pb.Message) {
 	št_dogodka = s.event_št.Add(1)
 	s.obvesti_naročnike(pb.MessageEvent{SequenceNumber: št_dogodka, Op: pb.OpType_OP_UPDATE, Message: message, EventAt: timestamppb.Now()})
 }
-func (s *server) NotifySlavesTopic (topic *pb.Topic) {
+func (s *server) NotifySlavesTopic(topic *pb.Topic) {
 	for _, slave := range s.slaves {
 		client, err := NewClient(slave)
 		if err != nil {
@@ -297,7 +298,7 @@ func (s *server) NotifySlavesTopic (topic *pb.Topic) {
 		}
 	}
 }
-func (s *server) NotifySlavesLike (like *pb.LikeMessageRequest) {
+func (s *server) NotifySlavesLike(like *pb.LikeMessageRequest) {
 	for _, slave := range s.slaves {
 		client, err := NewClient(slave)
 		if err != nil {
@@ -321,7 +322,7 @@ func (s *server) AddUser(ctx context.Context, req *pb.User) (*emptypb.Empty, err
 	}
 	user := &User{Name: req.Name, ID: req.Id}
 	if err := s.db.WithContext(ctx).
-		Clauses(clause.OnConflict{UpdateAll: true,}).Create(user).Error; err != nil {
+		Clauses(clause.OnConflict{UpdateAll: true}).Create(user).Error; err != nil {
 		return nil, err
 	}
 	s.NotifySlavesUser(req)
@@ -337,7 +338,7 @@ func (s *server) AddMessage(ctx context.Context, req *pb.Message) (*emptypb.Empt
 	}
 	message := &Message{ID: req.Id, TopicID: req.TopicId, UserID: req.UserId, Text: req.Text, CreatedAt: req.CreatedAt.AsTime(), Likes: req.Likes}
 	if err := s.db.WithContext(ctx).
-		Clauses(clause.OnConflict{UpdateAll: true,}).Create(message).Error; err != nil {
+		Clauses(clause.OnConflict{UpdateAll: true}).Create(message).Error; err != nil {
 		return nil, err
 	}
 	s.NotifySlavesMessage(req)
@@ -353,7 +354,7 @@ func (s *server) AddLike(ctx context.Context, req *pb.LikeMessageRequest) (*empt
 	}
 	like := &MessageLike{MessageID: req.MessageId, UserID: req.UserId}
 	if err := s.db.WithContext(ctx).
-		Clauses(clause.OnConflict{UpdateAll: true,}).Create(like).Error; err != nil {
+		Clauses(clause.OnConflict{UpdateAll: true}).Create(like).Error; err != nil {
 		return nil, err
 	}
 	s.NotifySlavesLike(req)
@@ -369,7 +370,7 @@ func (s *server) AddTopic(ctx context.Context, req *pb.Topic) (*emptypb.Empty, e
 	}
 	topic := &Topic{ID: req.Id, Name: req.Name}
 	if err := s.db.WithContext(ctx).
-		Clauses(clause.OnConflict{UpdateAll: true,}).Create(topic).Error; err != nil {
+		Clauses(clause.OnConflict{UpdateAll: true}).Create(topic).Error; err != nil {
 		return nil, err
 	}
 	s.NotifySlavesTopic(req)
@@ -443,16 +444,16 @@ func parseJWT(tokenStr string) (int64, error) {
 
 	return claims.UserID, nil
 }
-func logInterceptor (s *server) grpc.UnaryServerInterceptor {
-	return func (ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+func logInterceptor(s *server) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		// log.Printf("logInterceptor request", info, req)
 		res, err := handler(ctx, req)
 		// log.Printf("logInterceptor response", res, err)
 		return res, err
 	}
 }
-func authInterceptor (s *server) grpc.UnaryServerInterceptor {
-	return func (
+func authInterceptor(s *server) grpc.UnaryServerInterceptor {
+	return func(
 		ctx context.Context,
 		req any,
 		info *grpc.UnaryServerInfo,
@@ -517,7 +518,7 @@ func userIDFromContext(ctx context.Context) (int64, error) {
 	return id, nil
 }
 
-func (s *server) Ping (ctx context.Context, req *emptypb.Empty) (*emptypb.Empty, error) {
+func (s *server) Ping(ctx context.Context, req *emptypb.Empty) (*emptypb.Empty, error) {
 	return &emptypb.Empty{}, nil
 }
 
@@ -845,9 +846,9 @@ func (s *server) GetLikes(ctx context.Context, req *emptypb.Empty) (*pb.GetLikes
 	allLikes := make([]*pb.LikeMessageRequest, 0, len(likes))
 	for _, l := range likes {
 		allLikes = append(allLikes, &pb.LikeMessageRequest{
-			TopicId: -1, // TODO get topicid for message
+			TopicId:   -1, // TODO get topicid for message
 			MessageId: l.MessageID,
-			UserId: l.UserID,
+			UserId:    l.UserID,
 		})
 	}
 
@@ -902,7 +903,7 @@ func (s *server) GetMessages(ctx context.Context, req *pb.GetMessagesRequest) (*
 		Messages: allMessages,
 	}, nil
 }
-func (s *server) obvesti_naročnike (dogodek pb.MessageEvent) {
+func (s *server) obvesti_naročnike(dogodek pb.MessageEvent) {
 	s.naročniki_lock.Lock()
 	defer s.naročniki_lock.Unlock()
 	naročniki_kopija := make(map[chan pb.MessageEvent]pb.SubscribeTopicRequest)
@@ -916,20 +917,20 @@ func (s *server) obvesti_naročnike (dogodek pb.MessageEvent) {
 			// continue
 		}
 		select {
-			case nchan <- dogodek:
-			default:
-				log.Println("odklapljam naročnika, ker ima poln medpomnilnik")
-				delete(s.naročniki, nchan)
-				close(nchan)
+		case nchan <- dogodek:
+		default:
+			log.Println("odklapljam naročnika, ker ima poln medpomnilnik")
+			delete(s.naročniki, nchan)
+			close(nchan)
 		}
 	}
 }
-func (s *server) SubscribeTopic (req *pb.SubscribeTopicRequest, stream grpc.ServerStreamingServer[pb.MessageEvent]) (error) {
+func (s *server) SubscribeTopic(req *pb.SubscribeTopicRequest, stream grpc.ServerStreamingServer[pb.MessageEvent]) error {
 	s.naročniki_lock.Lock()
 	naročnina := make(chan pb.MessageEvent, 16)
 	s.naročniki[naročnina] = *req
 	s.naročniki_lock.Unlock()
-	defer func () {
+	defer func() {
 		s.naročniki_lock.Lock()
 		delete(s.naročniki, naročnina)
 		s.naročniki_lock.Unlock()
