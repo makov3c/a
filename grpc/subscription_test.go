@@ -19,19 +19,19 @@ func TestMessageSubscription(t *testing.T) {
 		t.Fatalf("Failed to create client B: %v", err)
 	}
 	defer clientB.Close()
-	aID, err := clientA.CreateUser("Alice")
+	aID, err := clientA.CreateUser("Barbara")
 	if err != nil {
-		t.Fatalf("CreateUser Alice failed: %v", err)
+		t.Fatalf("CreateUser Barbara failed: %v", err)
 	}
 	if err := clientA.Login(aID); err != nil {
-		t.Fatalf("Login Alice failed: %v", err)
+		t.Fatalf("Login Barbara failed: %v", err)
 	}
-	bID, err := clientB.CreateUser("Bob")
+	bID, err := clientB.CreateUser("Anton")
 	if err != nil {
-		t.Fatalf("CreateUser Bob failed: %v", err)
+		t.Fatalf("CreateUser Anton failed: %v", err)
 	}
 	if err := clientB.Login(bID); err != nil {
-		t.Fatalf("Login Bob failed: %v", err)
+		t.Fatalf("Login Anton failed: %v", err)
 	}
 	topicID, err := clientA.CreateTopic("TestTopic")
 	if err != nil {
@@ -62,7 +62,7 @@ func TestMessageSubscription(t *testing.T) {
 	}
 	go func() {
 		time.Sleep(500 * time.Millisecond)
-		msgs := []string{"Hello Alice", "seks?", "Testing subscription"}
+		msgs := []string{"Hello Barbara", "kosilo?", "Testing subscription"}
 		for _, m := range msgs {
 			if _, err := clientB.PostMessage(topicID, m); err != nil {
 				log.Printf("Failed to post message: %v", err)
@@ -89,7 +89,7 @@ func TestMessageSubscription(t *testing.T) {
 			prev = ev.Message.Text
 		}
 	}
-	expected := []string{"Hello Alice", "seks?", "Testing subscription"}
+	expected := []string{"Hello Barbara", "kosilo?", "Testing subscription"}
 	for i, msg := range expected {
 		if received[i] != msg {
 			t.Errorf("Expected message %q but got %q", msg, received[i])
