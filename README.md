@@ -1,8 +1,6 @@
 # klepetalnica - ps projekt
 Rok za oddajo: 12. 1. 2026 23:59
 
-ukaze poganjaj v podmapi grpc
-
 Poženi nadzorno ravnino ali dve ali tri (če imaš samo eno, ne nastavi argumentov bootstrap, raftbind, raftaddress in cluster): TOLE POČNI V MAPI grpc/controlplane
 ```
 go run controlplanemain.go controlplaneimpl.go odjemalec.go --bind [::]:9800 --raftbind [::]:9810 --raftaddress localhost:9810 --bootstrap --myurl localhost:9800
@@ -49,7 +47,7 @@ glej mapo entr za ukaze za iteracijo z entr(1) POZOR, TO SO STARI UKAZI ZA NEK S
 
 Prevedi protoc:
 ```
-cd protobufRazpravljalnica; protoc --go_out=. --go_opt=paths=source_relative --go-grpc_out=. --go-grpc_opt=paths=source_relative razpravljalnica.proto
+cd protobuf; protoc --go_out=. --go_opt=paths=source_relative --go-grpc_out=. --go-grpc_opt=paths=source_relative razpravljalnica.proto
 ```
 
 V okoljske spremenljivke lahko daš
@@ -61,5 +59,5 @@ za več logov
 
 za poganjanje integration testov moraš imeti nadzorno ravnino na localhost:9800 in nato v mapi grpc poženi
 ```
-go test -tags=integration -v
+cd odjemalec; go test -tags=integration -v
 ```

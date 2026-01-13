@@ -11,7 +11,8 @@ import (
 	"io"
 	"path/filepath"
 	"slices"
-	pb "4a.si/razpravljalnica/grpc/protobufRazpravljalnica"
+	pb "4a.si/razpravljalnica/protobuf"
+	"4a.si/razpravljalnica/odjemalec"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -135,7 +136,7 @@ func ControlPlaneServer (bind string, s2s_psk string, raftbind string, raftaddre
 		wg.Done()
 	}()
 	if cluster != "" {
-		cpc, err := NewControlPlaneClient(cluster, s.s2s_psk)
+		cpc, err := odjemalec.NewControlPlaneClient(cluster, s.s2s_psk)
 		if err != nil {
 			panic(err)
 		}
@@ -145,13 +146,13 @@ func ControlPlaneServer (bind string, s2s_psk string, raftbind string, raftaddre
 		}
 		log.Printf("Got address of raft leader. It is %v", res)
 		cpc.Close()
-		cpc, err = NewControlPlaneClient(res.ControlplaneAddress, s.s2s_psk)
+		cpc, err = odjemalec.NewControlPlaneClient(res.ControlplaneAddress, s.s2s_psk)
 		if err != nil {
 			panic(err)
 		}
 		pbcpa := &pb.ControlPlaneInfo{ControlplaneAddress: myurl, RaftAddress: s.raft_address}
 		log.Printf("Calling ControlPlaneAvailable with %v", pbcpa)
-		_, err = cpc.api.ControlPlaneAvailable(cpc.ctx(), pbcpa)
+		_, err = cpc.Api.ControlPlaneAvailable(cpc.Ctx(), pbcpa)
 		if err != nil {
 			panic(err)
 		}
@@ -169,13 +170,13 @@ func ControlPlaneServer (bind string, s2s_psk string, raftbind string, raftaddre
 		veriga := s.veriga(false)
 		log.Printf("healthcheck: veriga je %v", veriga)
 		for index, url := range veriga {
-			c, err := NewClient(url)
+			c, err := odjemalec.NewClient(url)
 			if err != nil {
 				log.Printf("healthcheck: NewClient %v failed with %v", url, err)
 				goto ERR
 			}
-			c.token = s.s2s_psk
-			_, err = c.api.Ping(c.ctx(), &emptypb.Empty{})
+			c.Token = s.s2s_psk
+			_, err = c.Api.Ping(c.Ctx(), &emptypb.Empty{})
 			if err != nil {
 				log.Printf("healthcheck: Ping %v failed with %v", url, err)
 				goto ERR
@@ -184,16 +185,16 @@ func ControlPlaneServer (bind string, s2s_psk string, raftbind string, raftaddre
 			ERR:
 			s.veriga_lock.Lock()
 			if index != 0 {
-				c, err := NewClient(veriga[index-1])
+				c, err := odjemalec.NewClient(veriga[index-1])
 				if err != nil {
 					panic(err)
 				}
-				c.token = s.s2s_psk
+				c.Token = s.s2s_psk
 				newslaves := []string{}
 				if index+1 < len(veriga) {
 					newslaves = []string{veriga[index+1]}
 				}
-				_, err = c.api.SetSlaves(c.ctx(), &pb.SetSlavesRequest{Slaves: newslaves})
+				_, err = c.Api.SetSlaves(c.Ctx(), &pb.SetSlavesRequest{Slaves: newslaves})
 				if err != nil {
 					log.Printf("idk, pizdarija SetSlaves: %v", err) // FIXME
 				}
@@ -202,12 +203,12 @@ func ControlPlaneServer (bind string, s2s_psk string, raftbind string, raftaddre
 					newmasters = []string{veriga[index-1]}
 				}
 				if index+1 < len(veriga) {
-					c2, err := NewClient(veriga[index+1])
+					c2, err := odjemalec.NewClient(veriga[index+1])
 					if err != nil {
 						panic(err)
 					}
-					c2.token = s.s2s_psk
-					_, err = c2.api.FetchFrom(c2.ctx(), &pb.FetchFromRequest{Masters: newmasters})
+					c2.Token = s.s2s_psk
+					_, err = c2.Api.FetchFrom(c2.Ctx(), &pb.FetchFromRequest{Masters: newmasters})
 					if err != nil {
 						log.Printf("idk, pizdarija FetchFrom: %v", err) // FIXME
 					}
@@ -219,12 +220,12 @@ func ControlPlaneServer (bind string, s2s_psk string, raftbind string, raftaddre
 			} else { // index == 0
 				s.head = ""
 				if index+1 < len(veriga) {
-					c2, err := NewClient(veriga[index+1])
+					c2, err := odjemalec.NewClient(veriga[index+1])
 					if err != nil {
 						panic(err)
 					}
-					c2.token = s.s2s_psk
-					_, err = c2.api.FetchFrom(c2.ctx(), &pb.FetchFromRequest{Masters: []string{}})
+					c2.Token = s.s2s_psk
+					_, err = c2.Api.FetchFrom(c2.Ctx(), &pb.FetchFromRequest{Masters: []string{}})
 					if err != nil {
 						log.Printf("#idk, pizdarija FetchFrom: %v", err) // FIXME
 					}
@@ -344,11 +345,11 @@ func (s *controlplaneserver) ControlPlaneAvailable (ctx context.Context, req *pb
 	if s.raft.State() != raft.Leader {
 		return nil, status.Error(codes.Internal, "ControlPlaneAvailable: this server is not the raft leader, call GetRaftLeader to get the leader")
 	}
-	c, err := NewControlPlaneClient(req.ControlplaneAddress, s.s2s_psk)
+	c, err := odjemalec.NewControlPlaneClient(req.ControlplaneAddress, s.s2s_psk)
 	if err != nil {
 		return nil, err
 	}
-	_, err = c.api.Ping(c.ctx(), &emptypb.Empty{})
+	_, err = c.Api.Ping(c.Ctx(), &emptypb.Empty{})
 	if err != nil {
 		return nil, err
 	}
@@ -376,13 +377,13 @@ func (s *controlplaneserver) ServerAvailable (ctx context.Context, req *pb.NodeI
 		return nil, status.Error(codes.Internal, "GetClusterState: I am not the raft leader.")
 	}
 	log.Printf("ServerAvailable called ", req, "\n")
-	c, err := NewClient(req.Address)
+	c, err := odjemalec.NewClient(req.Address)
 	if err != nil {
 		log.Printf("ServerAvailable: NewClient req.Address ", req.Address, " failed: ", err, "\n")
 		return nil, err
 	}
-	c.token = s.s2s_psk
-	_, err = c.api.Ping(c.ctx(), &emptypb.Empty{})
+	c.Token = s.s2s_psk
+	_, err = c.Api.Ping(c.Ctx(), &emptypb.Empty{})
 	if err != nil {
 		msg := "req.Address " + req.Address + " se NE odziva na ping"
 		log.Printf(msg)
@@ -411,20 +412,20 @@ func (s *controlplaneserver) ServerAvailable (ctx context.Context, req *pb.NodeI
 	}
 	tail = s.tail(false)
 	if tail != "" {
-		ctail, err := NewClient(tail)
+		ctail, err := odjemalec.NewClient(tail)
 		if err != nil {
 			log.Printf("ServerAvailable: NewClient tail ", tail, " failed: ", err, "\n")
 			return nil, err
 		}
-		ctail.token = s.s2s_psk
-		_, err = ctail.api.SetSlaves(ctail.ctx(), &pb.SetSlavesRequest{Slaves: []string{req.Address}})
+		ctail.Token = s.s2s_psk
+		_, err = ctail.Api.SetSlaves(ctail.Ctx(), &pb.SetSlavesRequest{Slaves: []string{req.Address}})
 		log.Printf("SetSlaves from tail " + tail + " returned")
 		if err != nil {
 			log.Printf("SetSlaves on ", tail, " je failal z ", err, "s.")
 			return nil, err
 		}
 		log.Printf("ServerAvailable: attempting to call FetchFrom on ", req.Address)
-		_, err = c.api.FetchFrom(c.ctx(), &pb.FetchFromRequest{Masters: []string{tail}})
+		_, err = c.Api.FetchFrom(c.Ctx(), &pb.FetchFromRequest{Masters: []string{tail}})
 		if err != nil {
 			log.Printf("FetchFrom na req.Address=", req.Address, " je failal: ", err)
 			return nil, err
@@ -447,12 +448,12 @@ func (s *controlplaneserver) ServerAvailable (ctx context.Context, req *pb.NodeI
 	SENDSETSLAVES:
 	if vverigi {
 		log.Printf("ServerAvailable vverigi: attempting to call FetchFrom on ", req.Address)
-		_, err = c.api.FetchFrom(c.ctx(), &pb.FetchFromRequest{Masters: curmasters})
+		_, err = c.Api.FetchFrom(c.Ctx(), &pb.FetchFromRequest{Masters: curmasters})
 		if err != nil {
 			log.Printf("FetchFrom vverigi na req.Address=", req.Address, " je failal: ", err)
 			return nil, err
 		}
-		_, err = c.api.SetSlaves(c.ctx(), &pb.SetSlavesRequest{Slaves: curslaves})
+		_, err = c.Api.SetSlaves(c.Ctx(), &pb.SetSlavesRequest{Slaves: curslaves})
 		if err != nil {
 			log.Printf("idk, pizdarija SetSlaves: %v", err) // FIXME
 		}

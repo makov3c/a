@@ -1,12 +1,12 @@
 //go:build integration
-package main
+package odjemalec
 import (
 	"context"
 	"fmt"
 	"log"
 	"testing"
 	"time"
-	pb "4a.si/razpravljalnica/grpc/protobufRazpravljalnica"
+	pb "4a.si/razpravljalnica/protobuf"
 )
 func TestMessageSubscription(t *testing.T) {
 	clientA, err := NewClientCP([]string{"localhost:9800"})

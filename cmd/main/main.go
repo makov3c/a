@@ -3,6 +3,7 @@ import (
 	"flag"
 	"log"
 	"fmt"
+	"4a.si/razpravljalnica/odjemalec"
 )
 func main () {
 	// read CLI arguments
@@ -22,7 +23,7 @@ func main () {
 	} else {
 		if *legacyPtr != "" {
 			log.Println("Starting legacy textual testing gRPC client, connecting to", *connectUrl)
-			ClientMain(*connectUrl, *legacyPtr)
+			odjemalec.ClientMain(*connectUrl, *legacyPtr)
 		} else {
 			fmt.Println("Starting gRPC TUI client, connecting to", *connectUrl)
 			StartTUI(*connectUrl)

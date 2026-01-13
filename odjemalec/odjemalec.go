@@ -1,10 +1,10 @@
-package main
+package odjemalec
 import (
 	"context"
 	"fmt"
 	"log"
 	"time"
-	pb "4a.si/razpravljalnica/grpc/protobufRazpravljalnica"
+	pb "4a.si/razpravljalnica/protobuf"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/codes"
@@ -14,8 +14,8 @@ import (
 )
 type ControlPlaneClient struct {
 	conn *grpc.ClientConn
-	api pb.ControlPlaneClient
-	token string
+	Api pb.ControlPlaneClient
+	Token string
 }
 func NewControlPlaneClient (addr string, s2s_psk string) (*ControlPlaneClient, error) {
 	conn, err := grpc.Dial(
@@ -28,36 +28,36 @@ func NewControlPlaneClient (addr string, s2s_psk string) (*ControlPlaneClient, e
 	// log.Printf("newcontrolplaneclient called with ", addr, " ", s2s_psk, "\n")
 	return &ControlPlaneClient{
 		conn: conn,
-		api:  pb.NewControlPlaneClient(conn),
-		token: s2s_psk,
+		Api:  pb.NewControlPlaneClient(conn),
+		Token: s2s_psk,
 	}, nil
 }
 func (c *ControlPlaneClient) Close() {
 	c.conn.Close()
 }
-func (c *ControlPlaneClient) ctx () context.Context {
+func (c *ControlPlaneClient) Ctx () context.Context {
 	md := metadata.New(nil)
-	if c.token != "" {
-		md.Set("authorization", "Bearer "+c.token)
+	if c.Token != "" {
+		md.Set("authorization", "Bearer "+c.Token)
 	}
 	return metadata.NewOutgoingContext(context.Background(), md)
 }
 func (c *ControlPlaneClient) GetClusterState () (string, string, error) {
-	res, err := c.api.GetClusterState(context.Background(), &emptypb.Empty{})
+	res, err := c.Api.GetClusterState(context.Background(), &emptypb.Empty{})
 	if err != nil {
 		return "", "", err
 	}
 	return res.Head.Address, res.Tail.Address, nil
 }
 func (c *ControlPlaneClient) ReportNotifyError (slave_url string) error {
-	_, err := c.api.ReportNotifyError(c.ctx(), &pb.NotifyErrorReport{Slave: slave_url})
+	_, err := c.Api.ReportNotifyError(c.Ctx(), &pb.NotifyErrorReport{Slave: slave_url})
 	if err != nil {
 		return err
 	}
 	return nil
 }
 func (c *ControlPlaneClient) ServerAvailable (url string) error {
-	_, err := c.api.ServerAvailable(c.ctx(), &pb.NodeInfo{NodeId: url, Address: url})
+	_, err := c.Api.ServerAvailable(c.Ctx(), &pb.NodeInfo{NodeId: url, Address: url})
 	if err != nil {
 		return err
 	}
@@ -65,8 +65,8 @@ func (c *ControlPlaneClient) ServerAvailable (url string) error {
 }
 func (c *ControlPlaneClient) GetRaftLeader (deadline time.Time) (*pb.ControlPlaneInfo, error) { // deadline je recimo time.Now().Add(time.Second())
 	RETRY:
-	ctx, _ := context.WithDeadline(c.ctx(), deadline)
-	res, err := c.api.GetRaftLeader(ctx, &emptypb.Empty{})
+	ctx, _ := context.WithDeadline(c.Ctx(), deadline)
+	res, err := c.Api.GetRaftLeader(ctx, &emptypb.Empty{})
 	if err != nil {
 		if deadline.Sub(time.Now()).Seconds() > 0 {
 			return nil, err
@@ -83,13 +83,13 @@ func (c *ControlPlaneClient) GetRaftLeader (deadline time.Time) (*pb.ControlPlan
 type Client struct {
 	conn  *grpc.ClientConn
 	tailconn *grpc.ClientConn
-	api	pb.MessageBoardClient // head
-	tail	pb.MessageBoardClient // tail
-	token string
+	Api	pb.MessageBoardClient // head
+	Tail	pb.MessageBoardClient // tail
+	Token string
 	cpurl string
 	cpc *ControlPlaneClient
-	userid int64
-	cplanes []string // filled by NewClientCP, use in future calls to NewClientCP
+	Userid int64
+	Cplanes []string // filled by NewClientCP, use in future calls to NewClientCP
 }
 
 func ClientMain(url string, uName string) {
@@ -196,7 +196,7 @@ func NewClientCP(addrs []string) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	res, err := cpc.api.GetControlPlanes(cpc.ctx(), &emptypb.Empty{})
+	res, err := cpc.Api.GetControlPlanes(cpc.Ctx(), &emptypb.Empty{})
 	if err != nil {
 		return nil, err
 	}
@@ -225,11 +225,11 @@ func NewClientCP(addrs []string) (*Client, error) {
 	c := &Client{
 		conn: headconn,
 		tailconn: tailconn,
-		api:  pb.NewMessageBoardClient(headconn),
-		tail:  pb.NewMessageBoardClient(tailconn),
+		Api:  pb.NewMessageBoardClient(headconn),
+		Tail:  pb.NewMessageBoardClient(tailconn),
 		cpc: cpc,
 		cpurl: leaderurl,
-		cplanes: cplanes,
+		Cplanes: cplanes,
 	}
 	return c, nil
 }
@@ -244,39 +244,39 @@ func NewClient(addr string) (*Client, error) {
 	}
 	c := &Client{
 		conn: conn,
-		api:  pb.NewMessageBoardClient(conn),
+		Api:  pb.NewMessageBoardClient(conn),
 	}
 	return c, nil
 }
 func (c *Client) Close() {
 	c.conn.Close()
 }
-func (c *Client) ctx() context.Context {
+func (c *Client) Ctx() context.Context {
 	md := metadata.New(nil)
-	if c.token != "" {
-		md.Set("authorization", "Bearer "+c.token)
+	if c.Token != "" {
+		md.Set("authorization", "Bearer "+c.Token)
 	}
 	return metadata.NewOutgoingContext(context.Background(), md)
 }
 func (c *Client) CreateUser(name string) (int64, error) {
-	res, err := c.api.CreateUser(context.Background(), &pb.CreateUserRequest{Name: name})
+	res, err := c.Api.CreateUser(context.Background(), &pb.CreateUserRequest{Name: name})
 	if err != nil {
 		return 0, err
 	}
 	return res.Id, nil
 }
 func (c *Client) Login (userID int64) error {
-	res, err := c.api.Login (context.Background(), &pb.LoginRequest{UserId: userID})
+	res, err := c.Api.Login (context.Background(), &pb.LoginRequest{UserId: userID})
 	if err != nil {
 		return err
 	}
-	c.token = res.Token
-	c.userid = userID
+	c.Token = res.Token
+	c.Userid = userID
 	return nil
 }
 
 func (c *Client) CreateTopic(name string) (int64, error) {
-	res, err := c.api.CreateTopic(c.ctx(), &pb.CreateTopicRequest{Name: name})
+	res, err := c.Api.CreateTopic(c.Ctx(), &pb.CreateTopicRequest{Name: name})
 	if err != nil {
 		return 0, err
 	}
@@ -284,24 +284,24 @@ func (c *Client) CreateTopic(name string) (int64, error) {
 }
 
 func (c *Client) AddUser(user *pb.User) error {
-	_, err := c.api.AddUser(c.ctx(), user)
+	_, err := c.Api.AddUser(c.Ctx(), user)
 	return err
 }
 func (c *Client) AddMessage(message *pb.Message) error {
-	_, err := c.api.AddMessage(c.ctx(), message)
+	_, err := c.Api.AddMessage(c.Ctx(), message)
 	return err
 }
 func (c *Client) AddTopic(topic *pb.Topic) error {
-	_, err := c.api.AddTopic(c.ctx(), topic)
+	_, err := c.Api.AddTopic(c.Ctx(), topic)
 	return err
 }
 func (c *Client) AddLike(like *pb.LikeMessageRequest) error {
-	_, err := c.api.AddLike(c.ctx(), like)
+	_, err := c.Api.AddLike(c.Ctx(), like)
 	return err
 }
 func (c *Client) PostMessage (topicID int64, text string) (int64, error) {
-	ctx, _ := context.WithDeadline(c.ctx(), time.Now().Add(time.Second))
-	res, err := c.api.PostMessage(ctx, &pb.PostMessageRequest{
+	ctx, _ := context.WithDeadline(c.Ctx(), time.Now().Add(time.Second))
+	res, err := c.Api.PostMessage(ctx, &pb.PostMessageRequest{
 		TopicId: topicID,
 		Text:    text,
 	})
@@ -313,7 +313,7 @@ func (c *Client) PostMessage (topicID int64, text string) (int64, error) {
 }
 
 func (c *Client) LikeMessage(topicID, messageID int64) error {
-	_, err := c.api.LikeMessage(c.ctx(), &pb.LikeMessageRequest{
+	_, err := c.Api.LikeMessage(c.Ctx(), &pb.LikeMessageRequest{
 		TopicId:   topicID,
 		MessageId: messageID,
 	})
@@ -324,7 +324,7 @@ func (c *Client) LikeMessage(topicID, messageID int64) error {
 }
 
 func (c *Client) UpdateMessage(topicID, messageID int64, text string) error {
-	_, err := c.api.UpdateMessage(c.ctx(), &pb.UpdateMessageRequest{
+	_, err := c.Api.UpdateMessage(c.Ctx(), &pb.UpdateMessageRequest{
 		TopicId:   topicID,
 		MessageId: messageID,
 		Text:      text,
@@ -336,8 +336,8 @@ func (c *Client) UpdateMessage(topicID, messageID int64, text string) error {
 }
 
 func (c *Client) DeleteMessage (messageID int64) error {
-	_, err := c.api.DeleteMessage(c.ctx(), &pb.DeleteMessageRequest{
-		UserId: c.userid,
+	_, err := c.Api.DeleteMessage(c.Ctx(), &pb.DeleteMessageRequest{
+		UserId: c.Userid,
 		MessageId: messageID,
 	})
 	if err != nil {
@@ -352,7 +352,7 @@ func (c *Client) GetSubscriptionNode(topicIDs []int64) (*pb.SubscriptionNodeResp
 		TopicId: topicIDs,
 	}
 
-	res, err := c.tail.GetSubscriptionNode(c.ctx(), req)
+	res, err := c.Tail.GetSubscriptionNode(c.Ctx(), req)
 	if err != nil {
 		return nil, err
 	}
@@ -365,7 +365,7 @@ func (c *Client) GetSubscriptionNode(topicIDs []int64) (*pb.SubscriptionNodeResp
 
 func (c *Client) ListTopics () {
 
-	res, err := c.tail.ListTopics(c.ctx(), &emptypb.Empty{})
+	res, err := c.Tail.ListTopics(c.Ctx(), &emptypb.Empty{})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -375,7 +375,7 @@ func (c *Client) ListTopics () {
 }
 
 func (c *Client) GetUsers() (map[int64]string, error) {
-	res, err := c.tail.GetUsers(c.ctx(), &emptypb.Empty{})
+	res, err := c.Tail.GetUsers(c.Ctx(), &emptypb.Empty{})
 	if err != nil {
 		return nil, err
 	}
@@ -389,7 +389,7 @@ func (c *Client) GetUsers() (map[int64]string, error) {
 
 func (c *Client) GetMessages (topicID int64, fromMessageID int64, limit int32) {
 
-	res, err := c.tail.GetMessages(c.ctx(), &pb.GetMessagesRequest{
+	res, err := c.Tail.GetMessages(c.Ctx(), &pb.GetMessagesRequest{
 		TopicId:       topicID,
 		FromMessageId: fromMessageID,
 		Limit:         limit,

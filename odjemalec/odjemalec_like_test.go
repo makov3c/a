@@ -1,5 +1,5 @@
 //go:build integration
-package main
+package odjemalec
 import (
 	"testing"
 	"time"

@@ -1,9 +1,9 @@
 //go:build integration
-package main
+package odjemalec
 import (
 	"testing"
 	"time"
-	pb "4a.si/razpravljalnica/grpc/protobufRazpravljalnica"
+	pb "4a.si/razpravljalnica/protobuf"
 )
 func getMessagesForTest (t *testing.T, c *Client, topicID int64) []*pb.Message {
 	t.Helper()

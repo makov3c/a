@@ -17,20 +17,17 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	pb "4a.si/razpravljalnica/grpc/protobufRazpravljalnica"
-
+	pb "4a.si/razpravljalnica/protobuf"
+	"4a.si/razpravljalnica/odjemalec"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
-
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
-
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -86,7 +83,7 @@ type server struct {
 	masters        []string // masters servers URLs. if len(s.masters) == 0, i am head node. updated on every FetchFrom.
 	slaves         []string // slaves servers URLs, just subscribers
 	controlplane   string   // control plane URL, "" for single server setup
-	cpc            *ControlPlaneClient
+	cpc            *odjemalec.ControlPlaneClient
 	cpc_lock       sync.RWMutex
 	s2s_psk        string
 	naročniki      map[chan pb.MessageEvent]pb.SubscribeTopicRequest
@@ -154,11 +151,11 @@ func Server(url string, controlplane string, s2s_psk string, myurl string, dbfil
 		if s2s_psk == "" {
 			log.Fatal("s2s_psk ne sme biti prazen niz")
 		}
-		var cpc *ControlPlaneClient
+		var cpc *odjemalec.ControlPlaneClient
 		cpc = nil
 		for cpurl, _ := range controlplanes {
 			var err error
-			cpc, err = NewControlPlaneClient(cpurl, s2s_psk)
+			cpc, err = odjemalec.NewControlPlaneClient(cpurl, s2s_psk)
 			if err != nil {
 				panic(err)
 			}
@@ -186,12 +183,12 @@ func Server(url string, controlplane string, s2s_psk string, myurl string, dbfil
 			}
 			log.Printf("healthcheck: obtainer raft leader: %v", res)
 			cpc.Close()
-			cpc, err = NewControlPlaneClient(res.ControlplaneAddress, s2s_psk)
+			cpc, err = odjemalec.NewControlPlaneClient(res.ControlplaneAddress, s2s_psk)
 			if err != nil {
 				panic(err)
 			}
-			ctx, _ := context.WithDeadline(cpc.ctx(), time.Now().Add(time.Second))
-			cps, err := cpc.api.GetControlPlanes(ctx, &emptypb.Empty{})
+			ctx, _ := context.WithDeadline(cpc.Ctx(), time.Now().Add(time.Second))
+			cps, err := cpc.Api.GetControlPlanes(ctx, &emptypb.Empty{})
 			if err != nil {
 				log.Printf("SPORNO, kao leader ne more odgovoriti na getcontrolplanes: %v", err)
 				cpc.Close()
@@ -236,15 +233,15 @@ func (s *server) FetchFrom(ctx context.Context, req *pb.FetchFromRequest) (*empt
 		return &emptypb.Empty{}, nil // noop, ne spreminja se master
 	}
 	for _, masterurl := range req.Masters {
-		c, err := NewClient(masterurl)
+		c, err := odjemalec.NewClient(masterurl)
 		if err != nil {
 			return nil, err
 		}
-		c.token = s.s2s_psk
+		c.Token = s.s2s_psk
 		log.Printf("FetchFrom: created a client for %v", masterurl)
 		defer c.Close()
 		{
-			res, err := c.api.GetUsers(c.ctx(), &emptypb.Empty{})
+			res, err := c.Api.GetUsers(c.Ctx(), &emptypb.Empty{})
 			if err != nil {
 				return nil, err
 			}
@@ -256,7 +253,7 @@ func (s *server) FetchFrom(ctx context.Context, req *pb.FetchFromRequest) (*empt
 			}
 		}
 		{
-			res, err := c.api.ListTopics(c.ctx(), &emptypb.Empty{})
+			res, err := c.Api.ListTopics(c.Ctx(), &emptypb.Empty{})
 			if err != nil {
 				return nil, err
 			}
@@ -268,7 +265,7 @@ func (s *server) FetchFrom(ctx context.Context, req *pb.FetchFromRequest) (*empt
 			}
 		}
 		{
-			res, err := c.api.GetLikes(c.ctx(), &emptypb.Empty{})
+			res, err := c.Api.GetLikes(c.Ctx(), &emptypb.Empty{})
 			if err != nil {
 				return nil, err
 			}
@@ -280,7 +277,7 @@ func (s *server) FetchFrom(ctx context.Context, req *pb.FetchFromRequest) (*empt
 			}
 		}
 		{
-			res, err := c.api.GetMessages(c.ctx(), &pb.GetMessagesRequest{
+			res, err := c.Api.GetMessages(c.Ctx(), &pb.GetMessagesRequest{
 				TopicId:       -1,
 				FromMessageId: -1,
 				Limit:         99999999,
@@ -323,12 +320,12 @@ func (s *server) handle_notify_err(err error, slave string) {
 }
 func (s *server) NotifySlavesUser(user *pb.User) {
 	for _, slave := range s.slaves {
-		client, err := NewClient(slave)
+		client, err := odjemalec.NewClient(slave)
 		if err != nil {
 			s.handle_notify_err(err, slave)
 			continue
 		}
-		client.token = s.s2s_psk
+		client.Token = s.s2s_psk
 		err = client.AddUser(user)
 		client.Close()
 		if err != nil {
@@ -338,12 +335,12 @@ func (s *server) NotifySlavesUser(user *pb.User) {
 }
 func (s *server) NotifySlavesMessage(message *pb.Message) {
 	for _, slave := range s.slaves {
-		client, err := NewClient(slave)
+		client, err := odjemalec.NewClient(slave)
 		if err != nil {
 			s.handle_notify_err(err, slave)
 			continue
 		}
-		client.token = s.s2s_psk
+		client.Token = s.s2s_psk
 		err = client.AddMessage(message)
 		client.Close()
 		if err != nil {
@@ -359,12 +356,12 @@ func (s *server) NotifySlavesMessage(message *pb.Message) {
 }
 func (s *server) NotifySlavesTopic(topic *pb.Topic) {
 	for _, slave := range s.slaves {
-		client, err := NewClient(slave)
+		client, err := odjemalec.NewClient(slave)
 		if err != nil {
 			s.handle_notify_err(err, slave)
 			continue
 		}
-		client.token = s.s2s_psk
+		client.Token = s.s2s_psk
 		err = client.AddTopic(topic)
 		client.Close()
 		if err != nil {
@@ -374,12 +371,12 @@ func (s *server) NotifySlavesTopic(topic *pb.Topic) {
 }
 func (s *server) NotifySlavesLike(like *pb.LikeMessageRequest) {
 	for _, slave := range s.slaves {
-		client, err := NewClient(slave)
+		client, err := odjemalec.NewClient(slave)
 		if err != nil {
 			s.handle_notify_err(err, slave)
 			continue
 		}
-		client.token = s.s2s_psk
+		client.Token = s.s2s_psk
 		err = client.AddLike(like)
 		client.Close()
 		if err != nil {
@@ -732,12 +729,12 @@ func (s *server) DeleteMessage(ctx context.Context, req *pb.DeleteMessageRequest
 	}
 
 	for _, slave := range s.slaves {
-		client, err := NewClient(slave)
+		client, err := odjemalec.NewClient(slave)
 		if err != nil {
 			s.handle_notify_err(err, slave)
 			continue
 		}
-		client.token = s.s2s_psk
+		client.Token = s.s2s_psk
 		err = client.DeleteMessage(req.MessageId)
 		client.Close()
 		if err != nil {
@@ -835,8 +832,8 @@ func (s *server) chooseSubscriptionNode(userID int64, topicIDs []int64) (*pb.Nod
 		defer s.cpc_lock.RUnlock()
 		return &pb.NodeInfo{NodeId: s.url, Address: s.url}, nil
 	}
-	ctx, _ := context.WithDeadline(s.cpc.ctx(), time.Now().Add(time.Second))
-	res, err := s.cpc.api.GetRandomNode(ctx, &emptypb.Empty{}) // FIXME s.cpc je lockan med network requestom!!!
+	ctx, _ := context.WithDeadline(s.cpc.Ctx(), time.Now().Add(time.Second))
+	res, err := s.cpc.Api.GetRandomNode(ctx, &emptypb.Empty{}) // FIXME s.cpc je lockan med network requestom!!!
 	s.cpc_lock.RUnlock()
 	if err != nil {
 		return nil, err

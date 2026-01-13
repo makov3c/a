@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	pb "4a.si/razpravljalnica/grpc/protobufRazpravljalnica"
+	pb "4a.si/razpravljalnica/protobuf"
+	"4a.si/razpravljalnica/odjemalec"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"google.golang.org/grpc/codes"
@@ -17,7 +17,7 @@ import (
 
 func StartTUI(addr string) {
 	app := tview.NewApplication()
-	var client *Client
+	var client *odjemalec.Client
 	loginForm := tview.NewForm()
 	topicsList := tview.NewList()
 	messagesList := tview.NewList().SetWrapAround(false).ShowSecondaryText(false)
@@ -48,14 +48,14 @@ func StartTUI(addr string) {
 	loginbuttonfunc := func() {
 		go func() {
 			var err error
-			client, err = NewClientCP(cplanes)
+			client, err = odjemalec.NewClientCP(cplanes)
 			if err != nil {
 				app.QueueUpdateDraw(func() {
 					loginForm.AddTextView("NewClientCP ni uspel: ", fmt.Sprintf("%v", err), 0, 2, true, false)
 				})
 				return
 			}
-			cplanes = client.cplanes
+			cplanes = client.Cplanes
 			if id == -1 {
 				idStr := loginForm.GetFormItemByLabel("User ID").(*tview.InputField).GetText()
 				id, _ = strconv.ParseInt(idStr, 10, 64)
@@ -87,16 +87,16 @@ func StartTUI(addr string) {
 					app.SetRoot(root, true).SetFocus(inputField)
 				}
 			})
-			res, err := client.tail.GetSubscriptionNode(client.ctx(), &pb.SubscriptionNodeRequest{UserId: client.userid, TopicId: []int64{}}) // nonstandard, recimo da prazen topicid seznam pomeni vsi topici
+			res, err := client.Tail.GetSubscriptionNode(client.Ctx(), &pb.SubscriptionNodeRequest{UserId: client.Userid, TopicId: []int64{}}) // nonstandard, recimo da prazen topicid seznam pomeni vsi topici
 			if err != nil {
 				loginForm.AddTextView("GetSubscriptionNode ni uspel: ", fmt.Sprintf("%v", err), 0, 1, true, false)
 				app.Stop()
 				return
 			}
 			token := res.SubscribeToken
-			subclient, err := NewClient(res.Node.Address)
-			subclient.Login(client.userid)
-			stream, err := subclient.api.SubscribeTopic(subclient.ctx(), &pb.SubscribeTopicRequest{TopicId: []int64{}, UserId: client.userid, FromMessageId: 0, SubscribeToken: token})
+			subclient, err := odjemalec.NewClient(res.Node.Address)
+			subclient.Login(client.Userid)
+			stream, err := subclient.Api.SubscribeTopic(subclient.Ctx(), &pb.SubscribeTopicRequest{TopicId: []int64{}, UserId: client.Userid, FromMessageId: 0, SubscribeToken: token})
 			if err != nil {
 				log.Fatal("SubscribeTopic ni uspel", err)
 			}
@@ -123,7 +123,7 @@ func StartTUI(addr string) {
 		AddButton("Register", func() {
 			go func() {
 				var err error
-				client, err = NewClientCP(cplanes)
+				client, err = odjemalec.NewClientCP(cplanes)
 				if err != nil {
 					app.QueueUpdateDraw(func() {
 						loginForm.AddTextView("NewClientCP ni uspel: ", fmt.Sprintf("%v", err), 0, 1, true, false)
@@ -213,9 +213,9 @@ func StartTUI(addr string) {
 	}
 }
 
-func loadTopics(app *tview.Application, c *Client, list *tview.List) {
+func loadTopics(app *tview.Application, c *odjemalec.Client, list *tview.List) {
 	go func() {
-		res, err := c.tail.ListTopics(c.ctx(), &emptypb.Empty{})
+		res, err := c.Tail.ListTopics(c.Ctx(), &emptypb.Empty{})
 		if err != nil {
 			app.Stop()
 			return
@@ -234,7 +234,7 @@ func loadTopics(app *tview.Application, c *Client, list *tview.List) {
 	}()
 }
 
-func loadMessages(app *tview.Application, root tview.Primitive, c *Client, list *tview.List, topicID int64) {
+func loadMessages(app *tview.Application, root tview.Primitive, c *odjemalec.Client, list *tview.List, topicID int64) {
 	go func() {
 		if c == nil {
 			return // race race race race !!!!!
@@ -244,7 +244,7 @@ func loadMessages(app *tview.Application, root tview.Primitive, c *Client, list 
 			app.Stop()
 			return
 		}
-		res, err := c.tail.GetMessages(c.ctx(), &pb.GetMessagesRequest{
+		res, err := c.Tail.GetMessages(c.Ctx(), &pb.GetMessagesRequest{
 			TopicId: topicID,
 			Limit:   9999,
 		})
@@ -296,7 +296,7 @@ func loadMessages(app *tview.Application, root tview.Primitive, c *Client, list 
 					parts := strings.SplitN(secondary, " ", 2)
 					msgid, _ := strconv.ParseInt(parts[0], 10, 64)
 					userid, _ := strconv.ParseInt(parts[1], 10, 64)
-					if c.userid != userid {
+					if c.Userid != userid {
 						return nil
 					}
 					c.DeleteMessage(msgid)
@@ -310,7 +310,7 @@ func loadMessages(app *tview.Application, root tview.Primitive, c *Client, list 
 					msgid, _ := strconv.ParseInt(parts[0], 10, 64)
 					userid, _ := strconv.ParseInt(parts[1], 10, 64)
 
-					if c.userid != userid {
+					if c.Userid != userid {
 						return nil
 					}
 
@@ -345,7 +345,7 @@ func loadMessages(app *tview.Application, root tview.Primitive, c *Client, list 
 
 func showAddTopicModal(
 	app *tview.Application,
-	c *Client,
+	c *odjemalec.Client,
 	topicsList *tview.List,
 	previousRoot tview.Primitive,
 ) {
@@ -382,7 +382,7 @@ func showAddTopicModal(
 
 func showEditMessageModal(
 	app *tview.Application,
-	c *Client,
+	c *odjemalec.Client,
 	previousRoot tview.Primitive,
 	list *tview.List,
 	topicID int64,
