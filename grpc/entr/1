@@ -1,1 +1,0 @@
-ls *.go | entr -pnrs "sleep .2; timeout 3 go run grpc.go streznik.go odjemalec.go tui.go -l [::]:9875 -r localhost:9870 -m e:9875 -d 5.db ; sqlite3 5.db .dump"

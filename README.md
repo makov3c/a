@@ -1,24 +1,26 @@
 # klepetalnica - ps projekt
 Rok za oddajo: 12. 1. 2026 23:59
 
-Poženi nadzorno ravnino ali dve ali tri (če imaš samo eno, ne nastavi argumentov bootstrap, raftbind, raftaddress in cluster): TOLE POČNI V MAPI grpc/controlplane
+Poženi nadzorno ravnino ali dve ali tri (če imaš samo eno, ne nastavi argumentov bootstrap, raftbind, raftaddress in cluster):
 ```
-go run controlplanemain.go controlplaneimpl.go odjemalec.go --bind [::]:9800 --raftbind [::]:9810 --raftaddress localhost:9810 --bootstrap --myurl localhost:9800
-go run controlplanemain.go controlplaneimpl.go odjemalec.go --bind [::]:9801 --raftbind [::]:9811 --raftaddress localhost:9811 --cluster localhost:9800 --myurl localhost:9801
-go run controlplanemain.go controlplaneimpl.go odjemalec.go --bind [::]:9802 --raftbind [::]:9812 --raftaddress localhost:9812 --cluster localhost:9800 --myurl localhost:9802
+go run ./cmd/controlplane --bind [::]:9800 --raftbind [::]:9810 --raftaddress localhost:9810 --bootstrap --myurl localhost:9800
+go run ./cmd/controlplane --bind [::]:9801 --raftbind [::]:9811 --raftaddress localhost:9811 --cluster localhost:9800 --myurl localhost:9801
+go run ./cmd/controlplane --bind [::]:9802 --raftbind [::]:9812 --raftaddress localhost:9812 --cluster localhost:9800 --myurl localhost:9802
 ```
 
 Poženi strežnik ali dva ali tri:
 ```
-go run grpc.go streznik.go odjemalec.go tui.go -l [::]:9820 -r localhost:9800 -m localhost:9820 -d 0.db
-go run grpc.go streznik.go odjemalec.go tui.go -l [::]:9821 -r localhost:9800 -m localhost:9821 -d 1.db
-go run grpc.go streznik.go odjemalec.go tui.go -l [::]:9822 -r localhost:9800 -m localhost:9822 -d 2.db
+go run ./cmd/razpravljalnica -l [::]:9820 -r localhost:9800 -m localhost:9820 -d 0.db
+go run ./cmd/razpravljalnica -l [::]:9821 -r localhost:9800 -m localhost:9821 -d 1.db
+go run ./cmd/razpravljalnica tui.go -l [::]:9822 -r localhost:9800 -m localhost:9822 -d 2.db
 ```
 
 Poženi odjemalca ali dva ali tri in podaj naslov controlplanea:
 ```
-go run grpc.go streznik.go odjemalec.go tui.go -r localhost:9800
+go run ./cmd/razpravljalnica -r localhost:9800
 ```
+
+Programa controlplane in razpravljalnica lahko poganjaš kjerkoli kar z `go run 4a.si/razpravljalnica/cmd/controlplane@latest` in `go run 4a.si/razpravljalnica/cmd/razpravljalnica@latest` ne da bi prenašal ta repozitorij.
 
 ## kako uporabljati TUI
 
@@ -43,11 +45,9 @@ go run grpc.go streznik.go odjemalec.go tui.go -r localhost:9800
 development
 ===========
 
-glej mapo entr za ukaze za iteracijo z entr(1) POZOR, TO SO STARI UKAZI ZA NEK STAR COMMIT, NE DELAJO NA NOVI VERZIJI
-
-Prevedi protobuf:
+Prevedi protobuf v mapici protobuf:
 ```
-cd protobuf; protoc --go_out=. --go_opt=paths=source_relative --go-grpc_out=. --go-grpc_opt=paths=source_relative razpravljalnica.proto
+protoc --go_out=. --go_opt=paths=source_relative --go-grpc_out=. --go-grpc_opt=paths=source_relative razpravljalnica.proto
 ```
 
 V okoljske spremenljivke lahko daš
@@ -57,7 +57,7 @@ export GRPC_GO_LOG_SEVERITY_LEVEL=info
 ```
 za več logov
 
-za poganjanje integration testov moraš imeti nadzorno ravnino na localhost:9800 in nato v mapi grpc poženi
+za poganjanje integration testov moraš imeti nadzorno ravnino na localhost:9800 in nato v mapi odjemalec poženi
 ```
-cd odjemalec; go test -tags=integration -v
+go test -tags=integration -v
 ```

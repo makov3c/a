@@ -7,7 +7,7 @@ import (
 )
 func getMessagesForTest (t *testing.T, c *Client, topicID int64) []*pb.Message {
 	t.Helper()
-	res, err := c.tail.GetMessages(c.ctx(), &pb.GetMessagesRequest{
+	res, err := c.Tail.GetMessages(c.Ctx(), &pb.GetMessagesRequest{
 		TopicId:       topicID,
 		FromMessageId: 0,
 		Limit:         100,

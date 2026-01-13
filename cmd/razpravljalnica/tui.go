@@ -276,16 +276,18 @@ func loadMessages(app *tview.Application, root tview.Primitive, c *odjemalec.Cli
 					msg.Text,
 				)
 				list.AddItem(label, fmt.Sprintf("%d %d", msg.Id, msg.UserId), 0, func() {
-					err := c.LikeMessage(topicID, msg.Id)
-					if err != nil {
-						st, ok := status.FromError(err)
-						if ok && st.Code() == codes.AlreadyExists {
-							return // already liked
+					go func () {
+						err := c.LikeMessage(topicID, msg.Id)
+						if err != nil {
+							st, ok := status.FromError(err)
+							if ok && st.Code() == codes.AlreadyExists {
+								return // already liked
+							}
+							app.Stop()
+							return
 						}
-						app.Stop()
-						return
-					}
-					loadMessages(app, root, c, list, topicID)
+						loadMessages(app, root, c, list, topicID)
+					}()
 				})
 			}
 			list.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
@@ -299,8 +301,10 @@ func loadMessages(app *tview.Application, root tview.Primitive, c *odjemalec.Cli
 					if c.Userid != userid {
 						return nil
 					}
-					c.DeleteMessage(msgid)
-					loadMessages(app, root, c, list, topicID)
+					go func () {
+						c.DeleteMessage(msgid)
+						loadMessages(app, root, c, list, topicID)
+					}()
 					return nil
 				case tcell.KeyCtrlE:
 					index := list.GetCurrentItem()
@@ -355,12 +359,14 @@ func showAddTopicModal(
 		AddButton("Create", func() {
 			name := form.GetFormItem(0).(*tview.InputField).GetText()
 			if name != "" {
-				_, err := c.CreateTopic(name)
-				if err != nil {
-					app.Stop()
-					return
-				}
-				loadTopics(app, c, topicsList)
+				go func () {
+					_, err := c.CreateTopic(name)
+					if err != nil {
+						app.Stop()
+						return
+					}
+					loadTopics(app, c, topicsList)
+				}()
 			}
 			app.SetRoot(previousRoot, true)
 			app.SetFocus(topicsList)
@@ -394,13 +400,15 @@ func showEditMessageModal(
 	form.
 		AddInputField("Edit message", originalText, 0, nil, nil).
 		AddButton("Save", func() {
-			text := form.GetFormItem(0).(*tview.InputField).GetText()
-			if text != "" {
-				c.UpdateMessage(topicID, messageID, text)
-			}
-			app.SetRoot(previousRoot, true)
-			app.SetFocus(list)
-			loadMessages(app, previousRoot, c, list, topicID)
+			go func () {
+				text := form.GetFormItem(0).(*tview.InputField).GetText()
+				if text != "" {
+					c.UpdateMessage(topicID, messageID, text)
+				}
+				app.SetRoot(previousRoot, true)
+				app.SetFocus(list)
+				loadMessages(app, previousRoot, c, list, topicID)
+			}()
 		}).
 		AddButton("Cancel", func() {
 			app.SetRoot(previousRoot, true)

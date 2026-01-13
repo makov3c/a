@@ -50,9 +50,9 @@ func TestMessageSubscription(t *testing.T) {
 		t.Fatalf("Failed to connect to subscription node: %v", err)
 	}
 	defer subConn.Close()
-	ctx, cancel := context.WithCancel(subConn.ctx())
+	ctx, cancel := context.WithCancel(subConn.Ctx())
 	defer cancel()
-	stream, err := subConn.api.SubscribeTopic(ctx, &pb.SubscribeTopicRequest{
+	stream, err := subConn.Api.SubscribeTopic(ctx, &pb.SubscribeTopicRequest{
 		TopicId:       []int64{topicID},
 		SubscribeToken: subRes.SubscribeToken,
 		FromMessageId: 0,
