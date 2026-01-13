@@ -45,7 +45,7 @@ development
 
 glej mapo entr za ukaze za iteracijo z entr(1) POZOR, TO SO STARI UKAZI ZA NEK STAR COMMIT, NE DELAJO NA NOVI VERZIJI
 
-Prevedi protoc:
+Prevedi protobuf:
 ```
 cd protobuf; protoc --go_out=. --go_opt=paths=source_relative --go-grpc_out=. --go-grpc_opt=paths=source_relative razpravljalnica.proto
 ```
