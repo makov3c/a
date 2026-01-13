@@ -293,7 +293,7 @@ func loadMessages(app *tview.Application, root tview.Primitive, c *odjemalec.Cli
 			list.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 				switch event.Key() {
 				case tcell.KeyDelete:
-				case tcell.KeyCtrlD:
+				case tcell.KeyCtrlB:
 					index := list.GetCurrentItem()
 					_, secondary := list.GetItemText(index)
 					parts := strings.SplitN(secondary, " ", 2)
