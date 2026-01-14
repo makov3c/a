@@ -1,0 +1,1 @@
+go run ./cmd/controlplane --bind [::]:9800 --raftbind [::]:9810 --raftaddress localhost:9810 --bootstrap --myurl localhost:9800

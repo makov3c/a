@@ -1,0 +1,1 @@
+go run ./cmd/razpravljalnica -l [::]:9821 -r localhost:9800 -m localhost:9821 -d 1.db

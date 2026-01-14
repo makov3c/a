@@ -1,0 +1,1 @@
+go run ./cmd/controlplane --bind [::]:9801 --raftbind [::]:9811 --raftaddress localhost:9811 --cluster localhost:9800 --myurl localhost:9801

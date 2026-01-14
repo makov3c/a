@@ -93,6 +93,9 @@ func StartTUI(addr string) {
 				app.Stop()
 				return
 			}
+			app.QueueUpdateDraw(func() {
+				statusBar.SetText(fmt.Sprintf("Logged in as %s, Ctrl-M to compose, subscription node: %s", users[id], res.Node.Address))
+			})
 			token := res.SubscribeToken
 			subclient, err := odjemalec.NewClient(res.Node.Address)
 			subclient.Login(client.Userid)
@@ -209,7 +212,10 @@ func StartTUI(addr string) {
 		if err := app.SetRoot(loginForm, true).Run(); err != nil {
 			panic(err)
 		}
-		// loginbuttonfunc()
+		go func () {
+			time.Sleep(time.Second)
+			loginbuttonfunc()
+		}()
 	}
 }
 
