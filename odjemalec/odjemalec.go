@@ -186,7 +186,7 @@ func NewClientCP(addrs []string) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	resx, err := cpc.GetRaftLeader(time.Now().Add(time.Second))
+	resx, err := cpc.GetRaftLeader(time.Now().Add(time.Second*5))
 	if err != nil {
 		return nil, err
 	}
@@ -300,7 +300,7 @@ func (c *Client) AddLike(like *pb.LikeMessageRequest) error {
 	return err
 }
 func (c *Client) PostMessage (topicID int64, text string) (int64, error) {
-	ctx, _ := context.WithDeadline(c.Ctx(), time.Now().Add(time.Second))
+	ctx, _ := context.WithDeadline(c.Ctx(), time.Now().Add(time.Second*5))
 	res, err := c.Api.PostMessage(ctx, &pb.PostMessageRequest{
 		TopicId: topicID,
 		Text:    text,
