@@ -229,6 +229,9 @@ func loadTopics(app *tview.Application, c *odjemalec.Client, list *tview.List) {
 				list.AddItem(t.Name, fmt.Sprintf("%d", t.Id), 0, nil)
 			}
 			list.SetBorder(true).SetTitle("Topics. Esc to select.")
+			if cur == 0 {
+				return
+			}
 			list.SetCurrentItem(cur)
 		})
 	}()
@@ -292,8 +295,7 @@ func loadMessages(app *tview.Application, root tview.Primitive, c *odjemalec.Cli
 			}
 			list.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 				switch event.Key() {
-				case tcell.KeyDelete:
-				case tcell.KeyCtrlB:
+				case tcell.KeyDelete, tcell.KeyCtrlB:
 					index := list.GetCurrentItem()
 					_, secondary := list.GetItemText(index)
 					parts := strings.SplitN(secondary, " ", 2)
